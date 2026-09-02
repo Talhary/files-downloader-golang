@@ -1,5 +1,5 @@
 """
-Python Controller & SDK for the Go High-Speed Multi-Part Download Engine.
+Python Controller & SDK for the Go High-Speed Multi-Part Download & Streaming Engine.
 Compatible with Windows, Linux (Ubuntu/Debian), macOS, and GitHub Actions.
 """
 
@@ -12,8 +12,9 @@ import os
 import platform
 import subprocess
 import sys
+import threading
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, AsyncGenerator, Callable, Dict, Generator, Optional
 
 
 @dataclasses.dataclass
@@ -83,7 +84,7 @@ class DownloadEngineError(Exception):
 
 class DLEngine:
     """
-    High-Speed Multi-Part Downloader controlled from Python.
+    High-Speed Multi-Part Downloader & Streamer controlled from Python.
     """
 
     def __init__(self, bin_path: Optional[str | Path] = None):
@@ -104,6 +105,8 @@ class DLEngine:
                 os.chmod(self.bin_path, 0o755)
             except Exception:
                 pass
+
+        self.last_progress: Optional[ProgressEvent] = None
 
     @staticmethod
     def _auto_detect_binary() -> Path:
@@ -142,7 +145,7 @@ class DLEngine:
 
     def probe(self, url: str, headers: Optional[Dict[str, str]] = None) -> ProbeResult:
         """
-        Probe remote target metadata without downloading.
+        Probe remote target metadata (size, ranges, filename) without downloading.
         """
         cmd = [str(self.bin_path), "-u", url, "--probe-only", "--json"]
         if headers:
@@ -188,7 +191,7 @@ class DLEngine:
         timeout: Optional[float] = None,
     ) -> DownloadResult:
         """
-        Download file with synchronous real-time progress callbacks.
+        Download file directly to disk with multi-part acceleration and real-time progress callbacks.
         """
         cmd = [
             str(self.bin_path),
@@ -227,7 +230,7 @@ class DLEngine:
                     data = json.loads(line)
                     event_type = data.get("event")
 
-                    if event_type == "progress" and on_progress:
+                    if event_type == "progress":
                         evt = ProgressEvent(
                             downloaded_bytes=data.get("downloaded_bytes", 0),
                             total_bytes=data.get("total_bytes", 0),
@@ -239,7 +242,9 @@ class DLEngine:
                             completed_chunks=data.get("completed_chunks", 0),
                             total_chunks=data.get("total_chunks", 0),
                         )
-                        on_progress(evt)
+                        self.last_progress = evt
+                        if on_progress:
+                            on_progress(evt)
 
                     elif event_type == "completed":
                         result = DownloadResult(
@@ -272,32 +277,114 @@ class DLEngine:
             process.kill()
             raise
 
-    async def download_async(
+    def stream(
         self,
         url: str,
-        output_path: Optional[str | Path] = None,
         concurrency: int = 16,
         chunk_size: str = "8MB",
-        stream_mode: bool = False,
+        buffer_size: int = 64 * 1024,
         retries: int = 5,
         headers: Optional[Dict[str, str]] = None,
         on_progress: Optional[Callable[[ProgressEvent], None]] = None,
-    ) -> DownloadResult:
+    ) -> Generator[bytes, None, None]:
         """
-        Asynchronous download for asyncio event loops.
+        Stream file content as raw byte chunks (Generator) while tracking progress in real-time.
+        Ideal for piping bytes into FastAPI StreamingResponse, S3, Google Drive, or network sockets.
         """
         cmd = [
             str(self.bin_path),
             "-u", url,
+            "-o", "-",        # Direct raw binary bytes to stdout
+            "-c", str(concurrency),
+            "-s", chunk_size,
+            "-r", str(retries),
+            "--json",         # Emits JSON events to stderr
+        ]
+        if headers:
+            for k, v in headers.items():
+                cmd.extend(["-H", f"{k}: {v}"])
+
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+        )
+
+        error_msg = []
+
+        # Background thread to read JSON progress events from stderr
+        def stderr_reader():
+            for line_bytes in process.stderr:
+                line = line_bytes.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                    event_type = data.get("event")
+                    if event_type == "progress":
+                        evt = ProgressEvent(
+                            downloaded_bytes=data.get("downloaded_bytes", 0),
+                            total_bytes=data.get("total_bytes", 0),
+                            percent=data.get("percent", 0.0),
+                            speed_bytes_sec=data.get("speed_bytes_sec", 0.0),
+                            eta_seconds=data.get("eta_seconds", 0.0),
+                            elapsed_seconds=data.get("elapsed_seconds", 0.0),
+                            active_workers=data.get("active_workers", 0),
+                            completed_chunks=data.get("completed_chunks", 0),
+                            total_chunks=data.get("total_chunks", 0),
+                        )
+                        self.last_progress = evt
+                        if on_progress:
+                            on_progress(evt)
+                    elif event_type == "error":
+                        error_msg.append(data.get("message", "Stream error"))
+                except json.JSONDecodeError:
+                    continue
+
+        t = threading.Thread(target=stderr_reader, daemon=True)
+        t.start()
+
+        try:
+            while True:
+                chunk = process.stdout.read(buffer_size)
+                if not chunk:
+                    break
+                yield chunk
+
+            process.wait()
+            t.join(timeout=1.0)
+
+            if process.returncode != 0:
+                err = " ".join(error_msg) if error_msg else f"Process exited with code {process.returncode}"
+                raise DownloadEngineError(f"Stream error: {err}")
+
+        except Exception:
+            process.kill()
+            raise
+
+    async def stream_async(
+        self,
+        url: str,
+        concurrency: int = 16,
+        chunk_size: str = "8MB",
+        buffer_size: int = 64 * 1024,
+        retries: int = 5,
+        headers: Optional[Dict[str, str]] = None,
+        on_progress: Optional[Callable[[ProgressEvent], None]] = None,
+    ) -> AsyncGenerator[bytes, None]:
+        """
+        Asynchronously stream file content as byte chunks (AsyncGenerator) with live progress tracking.
+        """
+        cmd = [
+            str(self.bin_path),
+            "-u", url,
+            "-o", "-",
             "-c", str(concurrency),
             "-s", chunk_size,
             "-r", str(retries),
             "--json",
         ]
-        if output_path:
-            cmd.extend(["-o", str(output_path)])
-        if stream_mode:
-            cmd.append("--stream")
         if headers:
             for k, v in headers.items():
                 cmd.extend(["-H", f"{k}: {v}"])
@@ -308,61 +395,57 @@ class DLEngine:
             stderr=asyncio.subprocess.PIPE,
         )
 
-        result: Optional[DownloadResult] = None
-        last_error: Optional[str] = None
+        error_msg = []
 
-        while True:
-            line_bytes = await proc.stdout.readline()
-            if not line_bytes:
-                break
-            line = line_bytes.decode("utf-8", errors="replace").strip()
-            if not line:
-                continue
+        async def read_stderr():
+            while True:
+                line_bytes = await proc.stderr.readline()
+                if not line_bytes:
+                    break
+                line = line_bytes.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                    if data.get("event") == "progress":
+                        evt = ProgressEvent(
+                            downloaded_bytes=data.get("downloaded_bytes", 0),
+                            total_bytes=data.get("total_bytes", 0),
+                            percent=data.get("percent", 0.0),
+                            speed_bytes_sec=data.get("speed_bytes_sec", 0.0),
+                            eta_seconds=data.get("eta_seconds", 0.0),
+                            elapsed_seconds=data.get("elapsed_seconds", 0.0),
+                            active_workers=data.get("active_workers", 0),
+                            completed_chunks=data.get("completed_chunks", 0),
+                            total_chunks=data.get("total_chunks", 0),
+                        )
+                        self.last_progress = evt
+                        if on_progress:
+                            if asyncio.iscoroutinefunction(on_progress):
+                                await on_progress(evt)
+                            else:
+                                on_progress(evt)
+                    elif data.get("event") == "error":
+                        error_msg.append(data.get("message", "Stream error"))
+                except json.JSONDecodeError:
+                    continue
 
-            try:
-                data = json.loads(line)
-                event_type = data.get("event")
+        stderr_task = asyncio.create_task(read_stderr())
 
-                if event_type == "progress" and on_progress:
-                    evt = ProgressEvent(
-                        downloaded_bytes=data.get("downloaded_bytes", 0),
-                        total_bytes=data.get("total_bytes", 0),
-                        percent=data.get("percent", 0.0),
-                        speed_bytes_sec=data.get("speed_bytes_sec", 0.0),
-                        eta_seconds=data.get("eta_seconds", 0.0),
-                        elapsed_seconds=data.get("elapsed_seconds", 0.0),
-                        active_workers=data.get("active_workers", 0),
-                        completed_chunks=data.get("completed_chunks", 0),
-                        total_chunks=data.get("total_chunks", 0),
-                    )
-                    if asyncio.iscoroutinefunction(on_progress):
-                        await on_progress(evt)
-                    else:
-                        on_progress(evt)
+        try:
+            while True:
+                chunk = await proc.stdout.read(buffer_size)
+                if not chunk:
+                    break
+                yield chunk
 
-                elif event_type == "completed":
-                    result = DownloadResult(
-                        filename=data.get("filename", ""),
-                        dest_path=data.get("dest_path", ""),
-                        total_bytes=data.get("total_bytes", 0),
-                        elapsed_seconds=data.get("elapsed_seconds", 0.0),
-                        avg_speed_bytes_sec=data.get("avg_speed_bytes_sec", 0.0),
-                    )
+            await proc.wait()
+            await stderr_task
 
-                elif event_type == "error":
-                    last_error = data.get("message")
+            if proc.returncode != 0:
+                err = " ".join(error_msg) if error_msg else f"Process exited with code {proc.returncode}"
+                raise DownloadEngineError(f"Stream error: {err}")
 
-            except json.JSONDecodeError:
-                continue
-
-        await proc.wait()
-        if proc.returncode != 0:
-            stderr_bytes = await proc.stderr.read()
-            raise DownloadEngineError(
-                last_error or f"Process exited with code {proc.returncode}: {stderr_bytes.decode()}"
-            )
-
-        if result is None:
-            raise DownloadEngineError(last_error or "Download finished without completion event")
-
-        return result
+        except Exception:
+            proc.kill()
+            raise

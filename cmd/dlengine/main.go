@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"os/signal"
@@ -36,9 +37,11 @@ type JSONEvent struct {
 	DestPath         string  `json:"dest_path,omitempty"`
 }
 
+var jsonWriter io.Writer = os.Stdout
+
 func emitJSON(event JSONEvent) {
 	data, _ := json.Marshal(event)
-	fmt.Println(string(data))
+	fmt.Fprintln(jsonWriter, string(data))
 }
 
 func main() {
@@ -59,8 +62,8 @@ func main() {
 
 	flag.StringVar(&rawURL, "u", defaultURL, "Target URL to download")
 	flag.StringVar(&rawURL, "url", defaultURL, "Target URL to download")
-	flag.StringVar(&destPath, "o", "", "Destination path (file or directory, defaults to remote filename)")
-	flag.StringVar(&destPath, "output", "", "Destination path (file or directory, defaults to remote filename)")
+	flag.StringVar(&destPath, "o", "", "Destination path (file, directory, or '-' for stdout binary stream)")
+	flag.StringVar(&destPath, "output", "", "Destination path (file, directory, or '-' for stdout binary stream)")
 	flag.IntVar(&concurrency, "c", 16, "Number of concurrent download connections (workers)")
 	flag.IntVar(&concurrency, "concurrency", 16, "Number of concurrent download connections (workers)")
 	flag.StringVar(&chunkSizeStr, "s", "8MB", "Chunk size (e.g. 4MB, 8MB, 16MB, 32MB)")
@@ -76,11 +79,17 @@ func main() {
 
 	flag.Parse()
 
+	isStdoutStream := destPath == "-" || destPath == "stdout"
+	if isStdoutStream {
+		streamMode = true
+		jsonWriter = os.Stderr // Route JSON events to stderr so stdout is pure binary data
+	}
+
 	if strings.TrimSpace(rawURL) == "" {
 		if jsonMode {
 			emitJSON(JSONEvent{Event: "error", Message: "Download URL is required."})
 		} else {
-			fmt.Println("❌ Error: Download URL is required.")
+			fmt.Fprintln(os.Stderr, "❌ Error: Download URL is required.")
 			flag.Usage()
 		}
 		os.Exit(1)
@@ -92,7 +101,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	if !jsonMode && !silentMode {
+	if !jsonMode && !silentMode && !isStdoutStream {
 		fmt.Println()
 		fmt.Println("================================================================================")
 		fmt.Println("  🚀 High-Speed Multi-Part Download & Streaming Engine (Go)")
@@ -108,7 +117,7 @@ func main() {
 		if jsonMode {
 			emitJSON(JSONEvent{Event: "error", Message: fmt.Sprintf("probe failed: %v", err)})
 		} else {
-			fmt.Printf("\n❌ Probe error: %v\n", err)
+			fmt.Fprintf(os.Stderr, "\n❌ Probe error: %v\n", err)
 		}
 		os.Exit(1)
 	}
@@ -144,7 +153,7 @@ func main() {
 		return
 	}
 
-	if !jsonMode && !silentMode {
+	if !jsonMode && !silentMode && !isStdoutStream {
 		fmt.Println("--------------------------------------------------------------------------------")
 		fmt.Printf("  📁 Filename:     %s\n", info.Filename)
 		fmt.Printf("  📦 File Size:    %s (%s bytes)\n", formatBytes(info.ContentLength), formatNumber(info.ContentLength))
@@ -183,7 +192,7 @@ func main() {
 					CompletedChunks:  s.CompletedChunks,
 					TotalChunks:      s.TotalChunks,
 				})
-			} else if !silentMode {
+			} else if !silentMode && !isStdoutStream {
 				ui.Update(s)
 			}
 		}, 150*time.Millisecond),
@@ -198,7 +207,9 @@ func main() {
 		targetOutputFile = info.Filename
 	}
 
-	if streamMode {
+	if isStdoutStream {
+		downloadResult, err = eng.DownloadToWriter(ctx, rawURL, os.Stdout)
+	} else if streamMode {
 		var f *os.File
 		f, err = os.OpenFile(targetOutputFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 		if err == nil {
@@ -210,7 +221,7 @@ func main() {
 	}
 
 	elapsed := time.Since(startTime)
-	if !jsonMode && !silentMode {
+	if !jsonMode && !silentMode && !isStdoutStream {
 		ui.ClearProgressLine()
 	}
 
@@ -218,7 +229,7 @@ func main() {
 		if jsonMode {
 			emitJSON(JSONEvent{Event: "error", Message: err.Error()})
 		} else {
-			fmt.Printf("\n❌ Download failed: %v\n", err)
+			fmt.Fprintf(os.Stderr, "\n❌ Download failed: %v\n", err)
 		}
 		os.Exit(1)
 	}
@@ -237,7 +248,7 @@ func main() {
 			ElapsedSeconds:   elapsed.Seconds(),
 			AvgSpeedBytesSec: avgSpeed,
 		})
-	} else if !silentMode {
+	} else if !silentMode && !isStdoutStream {
 		fmt.Println()
 		fmt.Println("================================================================================")
 		fmt.Println("  ✅ Download Completed Successfully!")
