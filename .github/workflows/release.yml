@@ -1,0 +1,77 @@
+name: Build & Create Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build Cross-Platform Binaries & Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Build Standalone Binaries
+        run: |
+          mkdir -p dist
+          
+          # Linux AMD64 (Ubuntu / standard servers)
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/dlengine-linux-amd64 ./cmd/dlengine
+          chmod +x dist/dlengine-linux-amd64
+          
+          # Linux ARM64 (AWS Graviton / Raspberry Pi)
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dist/dlengine-linux-arm64 ./cmd/dlengine
+          chmod +x dist/dlengine-linux-arm64
+          
+          # Windows AMD64
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/dlengine-windows-amd64.exe ./cmd/dlengine
+          
+          # macOS AMD64 & Apple Silicon (ARM64)
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dist/dlengine-darwin-amd64 ./cmd/dlengine
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/dlengine-darwin-arm64 ./cmd/dlengine
+
+          ls -lh dist/
+
+      - name: Determine Release Tag
+        id: release_tag
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=v1.0.0-${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create or Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
+        with:
+          tag_name: ${{ steps.release_tag.outputs.tag }}
+          name: Release ${{ steps.release_tag.outputs.tag }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            dist/dlengine-linux-amd64
+            dist/dlengine-linux-arm64
+            dist/dlengine-windows-amd64.exe
+            dist/dlengine-darwin-amd64
+            dist/dlengine-darwin-arm64
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

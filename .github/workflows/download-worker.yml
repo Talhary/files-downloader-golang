@@ -1,0 +1,66 @@
+name: Multi-Part Fast Downloader
+
+on:
+  workflow_dispatch:
+    inputs:
+      download_url:
+        description: "Target URL to download"
+        required: true
+        default: "https://dl.downloadly.ir/Files/Elearning/The_Gnomon_Workshop_3D_WEAPON_DESIGN_VR_WORKFLOW_2024-6.part5_Downloadly.ir.rar?nocache=1788171959"
+      concurrency:
+        description: "Concurrent connections (workers)"
+        required: false
+        default: "32"
+      chunk_size:
+        description: "Chunk Size (e.g. 8MB, 16MB)"
+        required: false
+        default: "8MB"
+      output_filename:
+        description: "Custom output filename (optional)"
+        required: false
+        default: ""
+
+jobs:
+  download:
+    name: High-Speed Multi-Part Download (Ubuntu)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Build Download Engine (Linux)
+        run: |
+          go build -ldflags="-s -w" -o ./bin/dlengine ./cmd/dlengine
+          chmod +x ./bin/dlengine
+
+      - name: Execute Fast Multi-Part Download
+        run: |
+          ARGS="-u \"${{ github.event.inputs.download_url }}\" -c ${{ github.event.inputs.concurrency }} -s ${{ github.event.inputs.chunk_size }}"
+          
+          if [ -n "${{ github.event.inputs.output_filename }}" ]; then
+            ARGS="$ARGS -o \"${{ github.event.inputs.output_filename }}\""
+          fi
+          
+          echo "Running: ./bin/dlengine $ARGS"
+          eval "./bin/dlengine $ARGS"
+
+      - name: List Downloaded Files
+        run: |
+          ls -lh
+
+      # Optional: Upload artifact or transfer to cloud storage
+      # - name: Upload to Artifacts
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: downloaded-files
+      #     path: |
+      #       *.rar
+      #       *.zip
+      #       *.tar.gz

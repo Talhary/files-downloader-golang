@@ -1,0 +1,23 @@
+# Binaries and executables
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.bin
+*.rar
+*.zip
+*.tar.gz
+
+# Test artifacts and local downloads
+sample_download.rar
+downloaded_file*
+test_download*
+test_stream*
+
+# OS / IDE files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp

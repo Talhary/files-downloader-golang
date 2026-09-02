@@ -1,0 +1,327 @@
+package engine
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+func TestCalculateChunks(t *testing.T) {
+	tests := []struct {
+		name         string
+		totalSize    int64
+		chunkSize    int64
+		concurrency  int
+		expectedLen  int
+		expectedLast int64
+	}{
+		{
+			name:         "Exact single chunk",
+			totalSize:    1024,
+			chunkSize:    1024,
+			concurrency:  4,
+			expectedLen:  1,
+			expectedLast: 1023,
+		},
+		{
+			name:         "Multiple even chunks",
+			totalSize:    4000,
+			chunkSize:    1000,
+			concurrency:  4,
+			expectedLen:  4,
+			expectedLast: 3999,
+		},
+		{
+			name:         "Uneven chunk with remainder",
+			totalSize:    4500,
+			chunkSize:    1000,
+			concurrency:  4,
+			expectedLen:  5,
+			expectedLast: 4499,
+		},
+		{
+			name:         "Zero total size",
+			totalSize:    0,
+			chunkSize:    1000,
+			concurrency:  4,
+			expectedLen:  0,
+			expectedLast: 0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			chunks := CalculateChunks(tc.totalSize, tc.chunkSize, tc.concurrency)
+			if len(chunks) != tc.expectedLen {
+				t.Fatalf("expected %d chunks, got %d", tc.expectedLen, len(chunks))
+			}
+			if len(chunks) > 0 {
+				lastChunk := chunks[len(chunks)-1]
+				if lastChunk.End != tc.expectedLast {
+					t.Fatalf("expected last chunk end to be %d, got %d", tc.expectedLast, lastChunk.End)
+				}
+				// Verify chunk continuity
+				var expectedStart int64 = 0
+				for i, ch := range chunks {
+					if ch.Start != expectedStart {
+						t.Fatalf("chunk %d start mismatch: expected %d, got %d", i, expectedStart, ch.Start)
+					}
+					expectedStart = ch.End + 1
+				}
+			}
+		})
+	}
+}
+
+func TestMultipartDownloadToFile(t *testing.T) {
+	// Generate 5MB random test data
+	testData := make([]byte, 5*1024*1024)
+	_, err := rand.Read(testData)
+	if err != nil {
+		t.Fatalf("generating random test data: %v", err)
+	}
+
+	server := createMockRangeServer(testData)
+	defer server.Close()
+
+	tempDir := t.TempDir()
+	destFile := filepath.Join(tempDir, "downloaded.bin")
+
+	var progressUpdates int32
+	opts := []Option{
+		WithConcurrency(4),
+		WithChunkSize(512 * 1024), // 512 KB chunks = 10 chunks
+		WithProgressCallback(func(s ProgressSnapshot) {
+			atomic.AddInt32(&progressUpdates, 1)
+		}, 20*time.Millisecond),
+	}
+
+	eng := New(opts...)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	info, err := eng.DownloadToFile(ctx, server.URL+"/test-file.bin", destFile)
+	if err != nil {
+		t.Fatalf("DownloadToFile failed: %v", err)
+	}
+
+	if info.ContentLength != int64(len(testData)) {
+		t.Errorf("expected ContentLength %d, got %d", len(testData), info.ContentLength)
+	}
+
+	// Verify file on disk
+	downloadedData, err := os.ReadFile(destFile)
+	if err != nil {
+		t.Fatalf("reading downloaded file: %v", err)
+	}
+
+	if !bytes.Equal(testData, downloadedData) {
+		t.Fatalf("downloaded file data does not match original source data byte-for-byte!")
+	}
+}
+
+func TestStreamReader(t *testing.T) {
+	testData := make([]byte, 2*1024*1024) // 2MB
+	_, _ = rand.Read(testData)
+
+	server := createMockRangeServer(testData)
+	defer server.Close()
+
+	eng := New(
+		WithConcurrency(4),
+		WithChunkSize(256*1024), // 8 chunks
+		WithStreamPrefetch(3),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	rc, info, err := eng.DownloadStream(ctx, server.URL+"/stream-test.bin")
+	if err != nil {
+		t.Fatalf("DownloadStream failed: %v", err)
+	}
+	defer rc.Close()
+
+	if info.ContentLength != int64(len(testData)) {
+		t.Errorf("expected ContentLength %d, got %d", len(testData), info.ContentLength)
+	}
+
+	streamedData, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("reading stream failed: %v", err)
+	}
+
+	if !bytes.Equal(testData, streamedData) {
+		t.Fatalf("streamed data does not match original data byte-for-byte!")
+	}
+}
+
+func TestDownloadToWriter(t *testing.T) {
+	testData := make([]byte, 1*1024*1024) // 1MB
+	_, _ = rand.Read(testData)
+
+	server := createMockRangeServer(testData)
+	defer server.Close()
+
+	eng := New(
+		WithConcurrency(4),
+		WithChunkSize(128*1024),
+	)
+
+	var buf bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, err := eng.DownloadToWriter(ctx, server.URL+"/writer-test.bin", &buf)
+	if err != nil {
+		t.Fatalf("DownloadToWriter failed: %v", err)
+	}
+
+	if !bytes.Equal(testData, buf.Bytes()) {
+		t.Fatalf("buffered writer data does not match original!")
+	}
+}
+
+func TestSingleStreamFallback(t *testing.T) {
+	testData := []byte("hello single stream fallback download content!")
+
+	// Server without Accept-Ranges
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("Content-Length", strconv.Itoa(len(testData)))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(testData)
+	}))
+	defer server.Close()
+
+	tempDir := t.TempDir()
+	destFile := filepath.Join(tempDir, "fallback.txt")
+
+	eng := New(WithConcurrency(4))
+	ctx := context.Background()
+
+	info, err := eng.DownloadToFile(ctx, server.URL+"/fallback.txt", destFile)
+	if err != nil {
+		t.Fatalf("fallback download failed: %v", err)
+	}
+
+	if info.AcceptRanges {
+		t.Errorf("expected AcceptRanges to be false")
+	}
+
+	data, err := os.ReadFile(destFile)
+	if err != nil {
+		t.Fatalf("reading fallback file: %v", err)
+	}
+
+	if string(data) != string(testData) {
+		t.Errorf("expected %q, got %q", string(testData), string(data))
+	}
+}
+
+func TestRetryOnTransientFailure(t *testing.T) {
+	testData := make([]byte, 512*1024)
+	_, _ = rand.Read(testData)
+
+	var failCount atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Fail the first 2 requests with 500 error, then succeed
+		if failCount.Add(1) <= 2 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Accept-Ranges", "bytes")
+		w.Header().Set("Content-Length", strconv.Itoa(len(testData)))
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		rangeHeader := r.Header.Get("Range")
+		if rangeHeader != "" {
+			var start, end int64
+			_, _ = fmt.Sscanf(rangeHeader, "bytes=%d-%d", &start, &end)
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(testData)))
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write(testData[start : end+1])
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(testData)
+	}))
+	defer server.Close()
+
+	tempDir := t.TempDir()
+	destFile := filepath.Join(tempDir, "retry-test.bin")
+
+	eng := New(
+		WithMaxRetries(3),
+		WithRetryDelay(10*time.Millisecond),
+	)
+
+	_, err := eng.DownloadToFile(context.Background(), server.URL+"/file.bin", destFile)
+	if err != nil {
+		t.Fatalf("expected download to succeed after retries, but got: %v", err)
+	}
+
+	data, err := os.ReadFile(destFile)
+	if err != nil {
+		t.Fatalf("reading file: %v", err)
+	}
+
+	if !bytes.Equal(data, testData) {
+		t.Fatalf("data mismatch after retry")
+	}
+}
+
+func createMockRangeServer(data []byte) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Accept-Ranges", "bytes")
+		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("ETag", `"mock-etag-123"`)
+
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		rangeHeader := r.Header.Get("Range")
+		if rangeHeader != "" && strings.HasPrefix(rangeHeader, "bytes=") {
+			rangeSpec := strings.TrimPrefix(rangeHeader, "bytes=")
+			parts := strings.Split(rangeSpec, "-")
+			if len(parts) == 2 {
+				start, _ := strconv.ParseInt(parts[0], 10, 64)
+				end, err := strconv.ParseInt(parts[1], 10, 64)
+				if err != nil || end >= int64(len(data)) {
+					end = int64(len(data)) - 1
+				}
+
+				if start <= end && start < int64(len(data)) {
+					w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(data)))
+					w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))
+					w.WriteHeader(http.StatusPartialContent)
+					_, _ = w.Write(data[start : end+1])
+					return
+				}
+			}
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(data)
+	}))
+}
