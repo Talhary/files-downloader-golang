@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -19,6 +20,7 @@ import (
 
 type JSONEvent struct {
 	Event            string  `json:"event"`
+	Version          string  `json:"version,omitempty"`
 	Filename         string  `json:"filename,omitempty"`
 	TotalBytes       int64   `json:"total_bytes,omitempty"`
 	DownloadedBytes  int64   `json:"downloaded_bytes,omitempty"`
@@ -46,19 +48,29 @@ func emitJSON(event JSONEvent) {
 
 func main() {
 	var (
-		rawURL       string
-		destPath     string
-		concurrency  int
-		chunkSizeStr string
-		streamMode   bool
-		maxRetries   int
-		jsonMode     bool
-		silentMode   bool
-		probeOnly    bool
-		headersFlag  headerList
+		rawURL            string
+		destPath          string
+		concurrency       int
+		chunkSizeStr      string
+		streamMode        bool
+		maxRetries        int
+		jsonMode          bool
+		silentMode        bool
+		probeOnly         bool
+		headersFlag       headerList
+		showVersion       bool
+		timeoutStr        string
+		linkTimeoutStr    string
+		connectTimeoutStr string
+		idleTimeoutStr    string
+		probeTimeoutStr   string
+		insecure          bool
 	)
 
 	defaultURL := "https://dl.downloadly.ir/Files/Elearning/The_Gnomon_Workshop_3D_WEAPON_DESIGN_VR_WORKFLOW_2024-6.part5_Downloadly.ir.rar?nocache=1788171959"
+
+	flag.BoolVar(&showVersion, "v", false, "Print version and exit")
+	flag.BoolVar(&showVersion, "version", false, "Print version and exit")
 
 	flag.StringVar(&rawURL, "u", defaultURL, "Target URL to download")
 	flag.StringVar(&rawURL, "url", defaultURL, "Target URL to download")
@@ -77,7 +89,21 @@ func main() {
 	flag.Var(&headersFlag, "H", "Custom HTTP Header in 'Key: Value' format (can be specified multiple times)")
 	flag.Var(&headersFlag, "header", "Custom HTTP Header in 'Key: Value' format")
 
+	flag.StringVar(&timeoutStr, "t", "", "Overall download timeout (e.g. '30s', '10m', '1h', or integer seconds)")
+	flag.StringVar(&timeoutStr, "timeout", "", "Overall download timeout (e.g. '30s', '10m', '1h', or integer seconds)")
+	flag.StringVar(&linkTimeoutStr, "link-timeout", "30s", "Link / HTTP response header timeout (e.g. '30s', '15s')")
+	flag.StringVar(&connectTimeoutStr, "connect-timeout", "15s", "Connection & TLS handshake timeout (e.g. '15s', '10s')")
+	flag.StringVar(&idleTimeoutStr, "idle-timeout", "30s", "Per-chunk read stall / idle timeout (e.g. '30s', '45s')")
+	flag.StringVar(&probeTimeoutStr, "probe-timeout", "15s", "Probe metadata request timeout (e.g. '15s')")
+	flag.BoolVar(&insecure, "k", false, "Allow insecure TLS certificates (InsecureSkipVerify)")
+	flag.BoolVar(&insecure, "insecure", false, "Allow insecure TLS certificates (InsecureSkipVerify)")
+
 	flag.Parse()
+
+	if showVersion {
+		fmt.Printf("dlengine version %s\n", engine.Version)
+		return
+	}
 
 	isStdoutStream := destPath == "-" || destPath == "stdout"
 	if isStdoutStream {
@@ -97,14 +123,26 @@ func main() {
 
 	chunkSizeBytes := parseSize(chunkSizeStr, engine.DefaultChunkSize)
 
-	// Set up cancellation context
+	downloadTimeout := parseDuration(timeoutStr, 0)
+	linkTimeout := parseDuration(linkTimeoutStr, engine.DefaultLinkTimeout)
+	connectTimeout := parseDuration(connectTimeoutStr, engine.DefaultConnectTimeout)
+	idleTimeout := parseDuration(idleTimeoutStr, engine.DefaultIdleTimeout)
+	probeTimeout := parseDuration(probeTimeoutStr, engine.DefaultProbeTimeout)
+
+	// Set up cancellation context with signal notification
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	if downloadTimeout > 0 {
+		var timeoutCancel context.CancelFunc
+		ctx, timeoutCancel = context.WithTimeout(ctx, downloadTimeout)
+		defer timeoutCancel()
+	}
 
 	if !jsonMode && !silentMode && !isStdoutStream {
 		fmt.Println()
 		fmt.Println("================================================================================")
-		fmt.Println("  🚀 High-Speed Multi-Part Download & Streaming Engine (Go)")
+		fmt.Printf("  🚀 High-Speed Multi-Part Download & Streaming Engine (Go) v%s\n", engine.Version)
 		fmt.Println("================================================================================")
 		fmt.Printf("  🔍 Probing target: %s\n", truncateString(rawURL, 65))
 	}
@@ -112,12 +150,22 @@ func main() {
 	// Probe remote target first
 	probeOpts := engine.DefaultOptions()
 	probeOpts.Headers = headersFlag.toMap()
+	probeOpts.Insecure = insecure
+	probeOpts.ConnectTimeout = connectTimeout
+	probeOpts.LinkTimeout = linkTimeout
+	probeOpts.ProbeTimeout = probeTimeout
+	probeOpts.ReconfigureTransport()
+
 	info, err := engine.Probe(ctx, rawURL, probeOpts)
 	if err != nil {
+		msg := err.Error()
+		if errors.Is(err, context.DeadlineExceeded) {
+			msg = fmt.Sprintf("probe timed out after %v", probeTimeout)
+		}
 		if jsonMode {
-			emitJSON(JSONEvent{Event: "error", Message: fmt.Sprintf("probe failed: %v", err)})
+			emitJSON(JSONEvent{Event: "error", Message: fmt.Sprintf("probe failed: %s", msg)})
 		} else {
-			fmt.Fprintf(os.Stderr, "\n❌ Probe error: %v\n", err)
+			fmt.Fprintf(os.Stderr, "\n❌ Probe error: %s\n", msg)
 		}
 		os.Exit(1)
 	}
@@ -140,6 +188,7 @@ func main() {
 	if jsonMode {
 		emitJSON(JSONEvent{
 			Event:        "probe",
+			Version:      engine.Version,
 			Filename:     info.Filename,
 			TotalBytes:   info.ContentLength,
 			AcceptRanges: info.AcceptRanges,
@@ -161,6 +210,10 @@ func main() {
 		fmt.Printf("  🌐 Range Support: %v (Status: %d)\n", info.AcceptRanges, info.StatusCode)
 		fmt.Printf("  🧵 Concurrency:  %d workers\n", concurrency)
 		fmt.Printf("  🧩 Chunk Size:   %s (%d total chunks)\n", formatBytes(chunkSizeBytes), numChunks)
+		fmt.Printf("  ⏱️  Timeouts:     Link: %v | Connect: %v | Idle: %v\n", linkTimeout, connectTimeout, idleTimeout)
+		if downloadTimeout > 0 {
+			fmt.Printf("  ⏳ Total Timeout: %v\n", downloadTimeout)
+		}
 		if destPath != "" {
 			fmt.Printf("  💾 Destination:  %s\n", destPath)
 		} else {
@@ -178,6 +231,12 @@ func main() {
 		engine.WithChunkSize(chunkSizeBytes),
 		engine.WithMaxRetries(maxRetries),
 		engine.WithHeaders(headersFlag.toMap()),
+		engine.WithInsecure(insecure),
+		engine.WithConnectTimeout(connectTimeout),
+		engine.WithLinkTimeout(linkTimeout),
+		engine.WithIdleTimeout(idleTimeout),
+		engine.WithProbeTimeout(probeTimeout),
+		engine.WithTimeout(downloadTimeout),
 		engine.WithProgressCallback(func(s engine.ProgressSnapshot) {
 			if jsonMode {
 				emitJSON(JSONEvent{
@@ -226,10 +285,16 @@ func main() {
 	}
 
 	if err != nil {
+		msg := err.Error()
+		if errors.Is(err, context.DeadlineExceeded) || strings.Contains(msg, "context deadline exceeded") {
+			msg = fmt.Sprintf("operation timed out after %v", downloadTimeout)
+		} else if errors.Is(err, context.Canceled) {
+			msg = "download canceled by user"
+		}
 		if jsonMode {
-			emitJSON(JSONEvent{Event: "error", Message: err.Error()})
+			emitJSON(JSONEvent{Event: "error", Message: msg})
 		} else {
-			fmt.Fprintf(os.Stderr, "\n❌ Download failed: %v\n", err)
+			fmt.Fprintf(os.Stderr, "\n❌ Download failed: %s\n", msg)
 		}
 		os.Exit(1)
 	}
@@ -242,6 +307,7 @@ func main() {
 	if jsonMode {
 		emitJSON(JSONEvent{
 			Event:            "completed",
+			Version:          engine.Version,
 			Filename:         info.Filename,
 			DestPath:         targetOutputFile,
 			TotalBytes:       info.ContentLength,
@@ -367,6 +433,20 @@ func formatNumber(n int64) string {
 		result = append(result, string(c))
 	}
 	return strings.Join(result, "")
+}
+
+func parseDuration(str string, fallback time.Duration) time.Duration {
+	str = strings.TrimSpace(str)
+	if str == "" {
+		return fallback
+	}
+	if d, err := time.ParseDuration(str); err == nil && d >= 0 {
+		return d
+	}
+	if sec, err := strconv.ParseInt(str, 10, 64); err == nil && sec >= 0 {
+		return time.Duration(sec) * time.Second
+	}
+	return fallback
 }
 
 func parseSize(str string, fallback int64) int64 {

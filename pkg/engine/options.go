@@ -7,6 +7,9 @@ import (
 	"time"
 )
 
+// Version is the current release version of the Download Engine.
+const Version = "1.1.0"
+
 // Default settings
 const (
 	DefaultConcurrency      = 8
@@ -16,7 +19,11 @@ const (
 	DefaultProgressInterval = 200 * time.Millisecond
 	DefaultCopyBufferSize   = 64 * 1024 // 64 KB
 	DefaultStreamPrefetch   = 4         // Number of chunks prefetched in memory
-	DefaultUserAgent        = "DownloadEngine/1.0 (+https://github.com/download-engine)"
+	DefaultUserAgent        = "DownloadEngine/1.1 (+https://github.com/download-engine)"
+	DefaultConnectTimeout   = 15 * time.Second
+	DefaultLinkTimeout      = 30 * time.Second // HTTP response header timeout
+	DefaultIdleTimeout      = 30 * time.Second // Read stall timeout per chunk
+	DefaultProbeTimeout     = 15 * time.Second
 )
 
 // ProgressSnapshot contains a snapshot of download progress at a given moment.
@@ -43,6 +50,12 @@ type Options struct {
 	ChunkSize        int64
 	MaxRetries       int
 	RetryDelay       time.Duration
+	Timeout          time.Duration // Overall operation timeout (0 = unlimited)
+	ConnectTimeout   time.Duration // TCP connect and TLS handshake timeout
+	LinkTimeout      time.Duration // HTTP response header timeout
+	IdleTimeout      time.Duration // Per-read stall timeout during chunk downloading
+	ProbeTimeout     time.Duration // Probe metadata timeout
+	Insecure         bool          // Allow insecure TLS certificates (InsecureSkipVerify)
 	HTTPClient       *http.Client
 	Headers          map[string]string
 	UserAgent        string
@@ -58,28 +71,17 @@ type Option func(*Options)
 
 // DefaultOptions returns a new Options struct initialized with robust defaults.
 func DefaultOptions() *Options {
-	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		MaxIdleConns:          100,
-		MaxIdleConnsPerHost:   32,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   15 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		TLSClientConfig:       &tls.Config{InsecureSkipVerify: false},
-		DisableCompression:    true, // Prevent automatic gzip on large binary archives
-		ForceAttemptHTTP2:     true,
-	}
-
-	return &Options{
+	opts := &Options{
 		Concurrency:      DefaultConcurrency,
 		ChunkSize:        DefaultChunkSize,
 		MaxRetries:       DefaultMaxRetries,
 		RetryDelay:       DefaultRetryDelay,
-		HTTPClient:       &http.Client{Transport: transport, Timeout: 0}, // 0 timeout for stream/chunk longevity
+		Timeout:          0,
+		ConnectTimeout:   DefaultConnectTimeout,
+		LinkTimeout:      DefaultLinkTimeout,
+		IdleTimeout:      DefaultIdleTimeout,
+		ProbeTimeout:     DefaultProbeTimeout,
+		Insecure:         false,
 		Headers:          make(map[string]string),
 		UserAgent:        DefaultUserAgent,
 		CopyBufferSize:   DefaultCopyBufferSize,
@@ -87,7 +89,52 @@ func DefaultOptions() *Options {
 		ProgressInterval: DefaultProgressInterval,
 		AutoRename:       true,
 	}
+	opts.ReconfigureTransport()
+	return opts
 }
+
+// ReconfigureTransport synchronizes HTTPClient and its Transport with current Options timeouts and TLS settings.
+func (o *Options) ReconfigureTransport() {
+	if o.HTTPClient == nil {
+		o.HTTPClient = &http.Client{Timeout: 0}
+	}
+	tr, ok := o.HTTPClient.Transport.(*http.Transport)
+	if !ok || tr == nil {
+		tr = &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			MaxIdleConns:          100,
+			MaxIdleConnsPerHost:   32,
+			IdleConnTimeout:       90 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			DisableCompression:    true,
+			ForceAttemptHTTP2:     true,
+		}
+		o.HTTPClient.Transport = tr
+	}
+
+	connTimeout := o.ConnectTimeout
+	if connTimeout <= 0 {
+		connTimeout = DefaultConnectTimeout
+	}
+	tr.DialContext = (&net.Dialer{
+		Timeout:   connTimeout,
+		KeepAlive: 30 * time.Second,
+	}).DialContext
+	tr.TLSHandshakeTimeout = connTimeout
+
+	linkTimeout := o.LinkTimeout
+	if linkTimeout <= 0 {
+		linkTimeout = DefaultLinkTimeout
+	}
+	tr.ResponseHeaderTimeout = linkTimeout
+
+	if tr.TLSClientConfig == nil {
+		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: o.Insecure}
+	} else {
+		tr.TLSClientConfig.InsecureSkipVerify = o.Insecure
+	}
+}
+
 
 // WithConcurrency sets the number of parallel download workers.
 func WithConcurrency(workers int) Option {
@@ -186,3 +233,57 @@ func WithCopyBufferSize(bytes int) Option {
 		}
 	}
 }
+
+// WithTimeout sets the overall operation timeout (0 = unlimited).
+func WithTimeout(d time.Duration) Option {
+	return func(o *Options) {
+		o.Timeout = d
+	}
+}
+
+// WithConnectTimeout sets the TCP dial and TLS handshake timeout.
+func WithConnectTimeout(d time.Duration) Option {
+	return func(o *Options) {
+		if d > 0 {
+			o.ConnectTimeout = d
+			o.ReconfigureTransport()
+		}
+	}
+}
+
+// WithLinkTimeout sets the HTTP response header timeout (wait time for link/server response).
+func WithLinkTimeout(d time.Duration) Option {
+	return func(o *Options) {
+		if d > 0 {
+			o.LinkTimeout = d
+			o.ReconfigureTransport()
+		}
+	}
+}
+
+// WithIdleTimeout sets the per-read idle stall timeout during chunk downloads.
+func WithIdleTimeout(d time.Duration) Option {
+	return func(o *Options) {
+		if d > 0 {
+			o.IdleTimeout = d
+		}
+	}
+}
+
+// WithProbeTimeout sets the timeout for probing remote file metadata.
+func WithProbeTimeout(d time.Duration) Option {
+	return func(o *Options) {
+		if d > 0 {
+			o.ProbeTimeout = d
+		}
+	}
+}
+
+// WithInsecure controls whether TLS certificate verification is skipped.
+func WithInsecure(insecure bool) Option {
+	return func(o *Options) {
+		o.Insecure = insecure
+		o.ReconfigureTransport()
+	}
+}
+

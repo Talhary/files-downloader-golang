@@ -52,34 +52,55 @@ func (e *Engine) DownloadToWriter(ctx context.Context, rawURL string, dest io.Wr
 }
 
 func (e *Engine) singleStreamReader(ctx context.Context, targetURL string, info *FileInfo) (io.ReadCloser, error) {
+	var cancel context.CancelFunc
+	if e.opts.Timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, e.opts.Timeout)
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
 	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
 		return nil, fmt.Errorf("creating stream request: %w", err)
 	}
 	applyHeaders(req, e.opts)
 
 	resp, err := e.opts.HTTPClient.Do(req)
 	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
 		return nil, fmt.Errorf("executing stream request: %w", err)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		resp.Body.Close()
+		if cancel != nil {
+			cancel()
+		}
 		return nil, fmt.Errorf("server returned status: %s", resp.Status)
+	}
+
+	var bodyReader io.ReadCloser = resp.Body
+	if e.opts.IdleTimeout > 0 {
+		bodyReader = newIdleTimeoutReader(resp.Body, e.opts.IdleTimeout)
 	}
 
 	tracker := NewProgressTracker(info.ContentLength, 1, e.opts.ProgressFunc, e.opts.ProgressInterval)
 	tracker.WorkerStarted()
 
 	return &trackingReadCloser{
-		rc:      resp.Body,
+		rc:      bodyReader,
 		tracker: tracker,
+		cancel:  cancel,
 	}, nil
 }
 
 type trackingReadCloser struct {
 	rc      io.ReadCloser
 	tracker *ProgressTracker
+	cancel  context.CancelFunc
 	closed  bool
 }
 
@@ -99,6 +120,9 @@ func (t *trackingReadCloser) Close() error {
 		return nil
 	}
 	t.closed = true
+	if t.cancel != nil {
+		t.cancel()
+	}
 	if t.tracker != nil {
 		t.tracker.WorkerFinished()
 		t.tracker.Stop(nil)
@@ -133,6 +157,12 @@ type chunkResult struct {
 }
 
 func (e *Engine) newPrefetchStreamReader(ctx context.Context, targetURL string, info *FileInfo) *prefetchStreamReader {
+	if e.opts.Timeout > 0 {
+		var timeoutCancel context.CancelFunc
+		ctx, timeoutCancel = context.WithTimeout(ctx, e.opts.Timeout)
+		_ = timeoutCancel
+	}
+
 	streamCtx, cancel := context.WithCancel(ctx)
 	chunks := CalculateChunks(info.ContentLength, e.opts.ChunkSize, e.opts.Concurrency)
 	tracker := NewProgressTracker(info.ContentLength, len(chunks), e.opts.ProgressFunc, e.opts.ProgressInterval)
@@ -202,13 +232,22 @@ func (sr *prefetchStreamReader) startPrefetchWorkers() {
 				}
 				sr.slotsMu.Unlock()
 
-				// Download chunk into memory buffer
-				buf := bytes.NewBuffer(make([]byte, 0, chunk.Size()))
-				err := downloadChunk(sr.ctx, sr.targetURL, chunk, buf, sr.opts, sr.tracker)
+				// Download chunk into memory buffer using WriterFactory for clean retries
+				var buf *bytes.Buffer
+				destFactory := func() (io.Writer, error) {
+					buf = bytes.NewBuffer(make([]byte, 0, chunk.Size()))
+					return buf, nil
+				}
+				err := downloadChunk(sr.ctx, sr.targetURL, chunk, destFactory, sr.opts, sr.tracker)
+
+				var chunkData []byte
+				if buf != nil {
+					chunkData = buf.Bytes()
+				}
 
 				sr.slotsMu.Lock()
 				sr.chunkSlots[chunk.Index] = &chunkResult{
-					data: buf.Bytes(),
+					data: chunkData,
 					err:  err,
 				}
 				sr.readyCond.Broadcast()
@@ -230,6 +269,7 @@ func (sr *prefetchStreamReader) startPrefetchWorkers() {
 		sr.slotsMu.Unlock()
 	}()
 }
+
 
 func (sr *prefetchStreamReader) Read(p []byte) (int, error) {
 	sr.slotsMu.Lock()

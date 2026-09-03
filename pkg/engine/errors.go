@@ -20,4 +20,11 @@ var (
 
 	// ErrMaxRetriesExceeded indicates that a chunk failed to download after all retries.
 	ErrMaxRetriesExceeded = errors.New("maximum retries exceeded for chunk")
+
+	// ErrTimeout indicates an HTTP connection, response header, or read idle timeout occurred.
+	ErrTimeout = errors.New("network connection or read idle timeout")
+
+	// ErrNonRetryable indicates an error that should not be retried (e.g. 401, 403, 404).
+	ErrNonRetryable = errors.New("non-retryable HTTP error")
 )
+

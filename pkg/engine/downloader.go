@@ -15,6 +15,7 @@ func New(opts ...Option) *Engine {
 			opt(options)
 		}
 	}
+	options.ReconfigureTransport()
 	return &Engine{opts: options}
 }
 

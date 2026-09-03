@@ -65,6 +65,22 @@ func (pt *ProgressTracker) AddBytes(n int64) {
 	}
 }
 
+// SubBytes atomically subtracts bytes from downloaded count (used for rolling back failed chunk retries).
+func (pt *ProgressTracker) SubBytes(n int64) {
+	if n > 0 {
+		pt.downloadedBytes.Add(-n)
+		for {
+			curr := pt.downloadedBytes.Load()
+			if curr >= 0 {
+				break
+			}
+			if pt.downloadedBytes.CompareAndSwap(curr, 0) {
+				break
+			}
+		}
+	}
+}
+
 // WorkerStarted increments active worker count.
 func (pt *ProgressTracker) WorkerStarted() {
 	pt.activeWorkers.Add(1)

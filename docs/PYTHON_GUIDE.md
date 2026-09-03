@@ -1,4 +1,4 @@
-# Python Integration Guide for Multi-Part Download Engine
+# Python Integration Guide for Multi-Part Download Engine (v1.1.0)
 
 This guide demonstrates how to control the Go Multi-Part Download Engine directly from Python on **Linux (Ubuntu)**, **macOS**, and **Windows**.
 
@@ -31,9 +31,9 @@ from dlengine import DLEngine, ProgressEvent
 # Initialize engine (auto-locates binary or specify path: DLEngine("./dlengine"))
 engine = DLEngine()
 
-# 1. Probe file information
+# 1. Probe file information with link timeout
 target_url = "https://dl.downloadly.ir/Files/Elearning/The_Gnomon_Workshop_3D_WEAPON_DESIGN_VR_WORKFLOW_2024-6.part5_Downloadly.ir.rar?nocache=1788171959"
-info = engine.probe(target_url)
+info = engine.probe(target_url, link_timeout="15s")
 
 print(f"Target File: {info.filename}")
 print(f"Size:        {info.total_mb:.2f} MB ({info.total_bytes:,} bytes)")
@@ -53,16 +53,19 @@ def on_progress(evt: ProgressEvent):
         flush=True,
     )
 
-# 3. Start high-speed multi-part download (e.g. 16 workers, 8MB chunks)
+# 3. Start high-speed multi-part download with timeouts
 result = engine.download(
     url=target_url,
     output_path="downloaded_file.rar",  # Desired local destination
     concurrency=16,                     # Number of parallel streams
     chunk_size="8MB",                   # Chunk size per worker
+    link_timeout="30s",                 # HTTP response header timeout
+    idle_timeout="30s",                 # Per-chunk read stall timeout
+    timeout="15m",                      # Overall download timeout
     on_progress=on_progress,
 )
 
-print(f"\n\n Download completed in {result.elapsed_seconds:.2f}s!")
+print(f"\n\nDownload completed in {result.elapsed_seconds:.2f}s!")
 print(f"Saved to: {result.dest_path}")
 print(f"Average Speed: {result.avg_speed_mb_s:.2f} MB/s")
 ```
@@ -79,13 +82,14 @@ async def download_file():
     engine = DLEngine()
     
     async def async_progress(evt: ProgressEvent):
-        if int(evt.percent) % 10 == 0:  # Log every 10%
-            print(f"[Async] {evt.percent:.0f}% - Speed: {evt.speed_mb_s:.2f} MB/s - ETA: {evt.eta_seconds:.0f}s")
+        print(f"[Async] {evt.percent:.1f}% - Speed: {evt.speed_mb_s:.2f} MB/s - ETA: {evt.eta_seconds:.0f}s")
 
     result = await engine.download_async(
         url="https://dl.downloadly.ir/...rar",
         output_path="async_download.rar",
         concurrency=32,
+        link_timeout="20s",
+        idle_timeout="30s",
         on_progress=async_progress,
     )
     print(f"Finished: {result.dest_path}")
@@ -95,7 +99,25 @@ asyncio.run(download_file())
 
 ---
 
-### Example C: Integration with `tqdm` Progress Bar
+### Example C: In-Memory Sequential Streaming (`Generator` / `AsyncGenerator`)
+
+Ideal for piping bytes directly into web responses (FastAPI `StreamingResponse`), cloud storage uploads (S3, GCS), or media players without saving to local disk:
+
+```python
+from dlengine import DLEngine
+
+engine = DLEngine()
+target_url = "https://example.com/movie.mp4"
+
+# Stream synchronous chunks
+for chunk in engine.stream(target_url, concurrency=16, link_timeout="20s"):
+    # send chunk to network socket or S3
+    pass
+```
+
+---
+
+### Example D: Integration with `tqdm` Progress Bar
 
 ```python
 from tqdm import tqdm
@@ -104,7 +126,7 @@ from dlengine import DLEngine, ProgressEvent
 engine = DLEngine()
 url = "https://dl.downloadly.ir/...rar"
 
-info = engine.probe(url)
+info = engine.probe(url, link_timeout="15s")
 pbar = tqdm(total=info.total_bytes, unit='B', unit_scale=True, desc=info.filename)
 
 last_bytes = 0
@@ -115,7 +137,7 @@ def update_tqdm(evt: ProgressEvent):
         pbar.update(delta)
         last_bytes = evt.downloaded_bytes
 
-result = engine.download(url, concurrency=16, on_progress=update_tqdm)
+result = engine.download(url, concurrency=16, link_timeout="30s", on_progress=update_tqdm)
 pbar.close()
 print("Done!")
 ```
@@ -132,6 +154,10 @@ print("Done!")
 | `chunk_size` | `str` | `"8MB"` | Size of each chunk (`"4MB"`, `"8MB"`, `"16MB"`, `"32MB"`). |
 | `stream_mode` | `bool` | `False` | Sequential stream pipeline mode (`io.Reader` prefetching). |
 | `retries` | `int` | `5` | Maximum retry attempts per chunk on dropped connections. |
+| `link_timeout` | `str` or `float` | `None` | HTTP response header timeout (e.g. `"30s"`, `30`). |
+| `connect_timeout` | `str` or `float` | `None` | TCP dial and TLS handshake timeout (e.g. `"15s"`, `15`). |
+| `idle_timeout` | `str` or `float` | `None` | Per-chunk read stall timeout (e.g. `"30s"`, `30`). |
+| `timeout` | `str` or `float` | `None` | Overall execution timeout (e.g. `"15m"`, `900`). |
+| `insecure` | `bool` | `False` | Allow insecure TLS certificates (InsecureSkipVerify). |
 | `headers` | `dict` | `None` | Custom HTTP headers (e.g. `{"Authorization": "Bearer ...", "User-Agent": "..."}`). |
 | `on_progress` | `Callable` | `None` | Callback receiving `ProgressEvent` dataclass every ~150ms. |
-| `timeout` | `float` | `None` | Maximum execution timeout in seconds. |

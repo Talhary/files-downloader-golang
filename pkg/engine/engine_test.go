@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -325,3 +326,203 @@ func createMockRangeServer(data []byte) *httptest.Server {
 		_, _ = w.Write(data)
 	}))
 }
+
+func TestLinkTimeout(t *testing.T) {
+	// Server that delays sending headers for 500ms
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(500 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("too late"))
+	}))
+	defer server.Close()
+
+	eng := New(
+		WithLinkTimeout(100 * time.Millisecond),
+		WithMaxRetries(0),
+	)
+
+	ctx := context.Background()
+	_, err := eng.Probe(ctx, server.URL)
+	if err == nil {
+		t.Fatalf("expected probe to fail due to link timeout, but got nil")
+	}
+}
+
+func TestIdleTimeoutRetry(t *testing.T) {
+	testData := []byte("hello world with idle timeout test data that is 64 bytes long!!")
+	var attemptCount atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Accept-Ranges", "bytes")
+		w.Header().Set("Content-Length", strconv.Itoa(len(testData)))
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		call := attemptCount.Add(1)
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes 0-%d/%d", len(testData)-1, len(testData)))
+		w.WriteHeader(http.StatusPartialContent)
+
+		if call == 1 {
+			// First call: write partial bytes, then stall
+			_, _ = w.Write(testData[:10])
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			time.Sleep(400 * time.Millisecond) // Exceeds 100ms idle timeout
+			_, _ = w.Write(testData[10:])
+			return
+		}
+
+		// Subsequent call: write immediately
+		_, _ = w.Write(testData)
+	}))
+	defer server.Close()
+
+	tempDir := t.TempDir()
+	destFile := filepath.Join(tempDir, "idle_test.bin")
+
+	eng := New(
+		WithIdleTimeout(100 * time.Millisecond),
+		WithMaxRetries(2),
+		WithRetryDelay(10 * time.Millisecond),
+	)
+
+	_, err := eng.DownloadToFile(context.Background(), server.URL, destFile)
+	if err != nil {
+		t.Fatalf("expected download to succeed after idle timeout retry, got: %v", err)
+	}
+
+	downloaded, err := os.ReadFile(destFile)
+	if err != nil {
+		t.Fatalf("reading downloaded file: %v", err)
+	}
+	if !bytes.Equal(downloaded, testData) {
+		t.Fatalf("file content mismatch: expected %q, got %q", testData, downloaded)
+	}
+}
+
+func TestRetryIntegrityAndOffset(t *testing.T) {
+	// 512KB test data
+	testData := make([]byte, 512*1024)
+	_, _ = rand.Read(testData)
+
+	var chunkFailCount atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Accept-Ranges", "bytes")
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", strconv.Itoa(len(testData)))
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		rangeHeader := r.Header.Get("Range")
+		var start, end int64
+		_, _ = fmt.Sscanf(rangeHeader, "bytes=%d-%d", &start, &end)
+
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(testData)))
+		w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))
+		w.WriteHeader(http.StatusPartialContent)
+
+		// Intentionally fail the first attempt of the second half after writing 100 bytes
+		if start > 0 && chunkFailCount.Add(1) == 1 {
+			_, _ = w.Write(testData[start : start+100])
+			// Close connection abruptly
+			hj, ok := w.(http.Hijacker)
+			if ok {
+				conn, _, _ := hj.Hijack()
+				_ = conn.Close()
+				return
+			}
+		}
+
+		_, _ = w.Write(testData[start : end+1])
+	}))
+	defer server.Close()
+
+	tempDir := t.TempDir()
+	destFile := filepath.Join(tempDir, "offset_integrity.bin")
+
+	eng := New(
+		WithConcurrency(2),
+		WithChunkSize(256*1024), // 2 chunks: 0-262143 and 262144-524287
+		WithMaxRetries(3),
+		WithRetryDelay(10*time.Millisecond),
+	)
+
+	_, err := eng.DownloadToFile(context.Background(), server.URL, destFile)
+	if err != nil {
+		t.Fatalf("download failed: %v", err)
+	}
+
+	downloaded, err := os.ReadFile(destFile)
+	if err != nil {
+		t.Fatalf("reading file: %v", err)
+	}
+
+	if !bytes.Equal(downloaded, testData) {
+		t.Fatalf("downloaded file corrupted after retry! Byte mismatch detected.")
+	}
+}
+
+func TestSanitizeFilename(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"normal.zip", "normal.zip"},
+		{"file:name?.rar", "file_name_.rar"},
+		{"../../evil.exe", "evil.exe"},
+		{"trailing_dot.", "trailing_dot"},
+		{"<illegal>|chars*.txt", "_illegal__chars_.txt"},
+		{"", "downloaded_file"},
+		{"...", "downloaded_file"},
+	}
+
+	for _, tc := range tests {
+		got := sanitizeFilename(tc.input)
+		if got != tc.expected {
+			t.Errorf("sanitizeFilename(%q) = %q; want %q", tc.input, got, tc.expected)
+		}
+	}
+
+	// Test extractFilename with URL containing query string and fragment
+	u := "https://example.com/downloads/archive.tar.gz?nocache=123#frag"
+	extracted := extractFilename(u, u, "")
+	if extracted != "archive.tar.gz" {
+		t.Errorf("extractFilename() = %q; want archive.tar.gz", extracted)
+	}
+}
+
+
+func TestNonRetryableError(t *testing.T) {
+	var requestCount atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		w.WriteHeader(http.StatusNotFound) // 404
+	}))
+	defer server.Close()
+
+	eng := New(
+		WithMaxRetries(5),
+		WithRetryDelay(10*time.Millisecond),
+	)
+
+	_, err := eng.Probe(context.Background(), server.URL)
+	if err == nil {
+		t.Fatalf("expected 404 to fail probe, but got nil")
+	}
+
+	if !errors.Is(err, ErrNonRetryable) {
+		t.Errorf("expected ErrNonRetryable, got: %v", err)
+	}
+
+	// Should not retry 5 times
+	if count := requestCount.Load(); count > 2 {
+		t.Errorf("expected at most 2 requests for non-retryable 404, got %d", count)
+	}
+}
+

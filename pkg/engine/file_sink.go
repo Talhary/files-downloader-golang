@@ -13,6 +13,12 @@ import (
 // DownloadToFile downloads the remote resource directly to a local file.
 // If the server supports range requests, it downloads parts concurrently using WriteAt.
 func (e *Engine) DownloadToFile(ctx context.Context, rawURL string, destPath string) (*FileInfo, error) {
+	if e.opts.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, e.opts.Timeout)
+		defer cancel()
+	}
+
 	info, err := Probe(ctx, rawURL, e.opts)
 	if err != nil {
 		return nil, fmt.Errorf("probe failed: %w", err)
@@ -102,9 +108,12 @@ func (e *Engine) downloadMultipartToFile(ctx context.Context, targetURL string, 
 				default:
 				}
 
-				// Direct random-access writer at chunk start offset
-				offsetWriter := io.NewOffsetWriter(file, chunk.Start)
-				if err := downloadChunk(workerCtx, targetURL, chunk, offsetWriter, e.opts, tracker); err != nil {
+				// Factory returns a new OffsetWriter at chunk.Start for each attempt to avoid offset corruption on retry
+				destFactory := func() (io.Writer, error) {
+					return io.NewOffsetWriter(file, chunk.Start), nil
+				}
+
+				if err := downloadChunk(workerCtx, targetURL, chunk, destFactory, e.opts, tracker); err != nil {
 					errOnce.Do(func() {
 						downloadErr = err
 						cancel() // Stop other workers
@@ -154,6 +163,13 @@ func (e *Engine) downloadSingleStreamToFile(ctx context.Context, targetURL strin
 		return fmt.Errorf("server returned status: %s", resp.Status)
 	}
 
+	var bodyReader io.ReadCloser = resp.Body
+	if e.opts.IdleTimeout > 0 {
+		idleReader := newIdleTimeoutReader(resp.Body, e.opts.IdleTimeout)
+		defer idleReader.Close()
+		bodyReader = idleReader
+	}
+
 	tracker := NewProgressTracker(info.ContentLength, 1, e.opts.ProgressFunc, e.opts.ProgressInterval)
 	defer func() {
 		tracker.Stop(err)
@@ -175,7 +191,7 @@ func (e *Engine) downloadSingleStreamToFile(ctx context.Context, targetURL strin
 		default:
 		}
 
-		n, rErr := resp.Body.Read(buf)
+		n, rErr := bodyReader.Read(buf)
 		if n > 0 {
 			if _, wErr := file.Write(buf[:n]); wErr != nil {
 				return fmt.Errorf("writing to disk: %w", wErr)
@@ -193,6 +209,7 @@ func (e *Engine) downloadSingleStreamToFile(ctx context.Context, targetURL strin
 
 	return file.Sync()
 }
+
 
 func (e *Engine) resolveDestPath(destPath string, info *FileInfo) (string, error) {
 	if destPath == "" {

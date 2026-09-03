@@ -2,12 +2,12 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"mime"
 	"net/http"
 	"net/url"
 	"path"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -55,10 +55,25 @@ func Probe(ctx context.Context, rawURL string, opts *Options) (*FileInfo, error)
 			}
 		}
 
-		info, err := attemptProbe(ctx, rawURL, opts)
+		probeCtx := ctx
+		var probeCancel context.CancelFunc
+		if opts.ProbeTimeout > 0 {
+			probeCtx, probeCancel = context.WithTimeout(ctx, opts.ProbeTimeout)
+		}
+
+		info, err := attemptProbe(probeCtx, rawURL, opts)
+		if probeCancel != nil {
+			probeCancel()
+		}
+
 		if err == nil {
 			return info, nil
 		}
+
+		if errors.Is(err, ErrNonRetryable) {
+			return nil, err
+		}
+
 		lastErr = err
 	}
 
@@ -75,8 +90,19 @@ func attemptProbe(ctx context.Context, rawURL string, opts *Options) (*FileInfo,
 
 	resp, err := opts.HTTPClient.Do(req)
 	if err != nil || resp.StatusCode >= 400 || (resp.ContentLength <= 0 && !hasAcceptRanges(resp)) {
-		if resp != nil && resp.Body != nil {
-			_ = resp.Body.Close()
+		if resp != nil {
+			if resp.StatusCode == http.StatusUnauthorized ||
+				resp.StatusCode == http.StatusForbidden ||
+				resp.StatusCode == http.StatusNotFound ||
+				resp.StatusCode == http.StatusGone {
+				if resp.Body != nil {
+					_ = resp.Body.Close()
+				}
+				return nil, fmt.Errorf("%w: HEAD probe returned HTTP status %d: %s", ErrNonRetryable, resp.StatusCode, resp.Status)
+			}
+			if resp.Body != nil {
+				_ = resp.Body.Close()
+			}
 		}
 		// Fallback attempt: GET request with Range: bytes=0-0
 		return probeWithGetRange(ctx, rawURL, opts)
@@ -112,6 +138,13 @@ func probeWithGetRange(ctx context.Context, rawURL string, opts *Options) (*File
 		return nil, fmt.Errorf("executing GET range probe: %w", err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized ||
+		resp.StatusCode == http.StatusForbidden ||
+		resp.StatusCode == http.StatusNotFound ||
+		resp.StatusCode == http.StatusGone {
+		return nil, fmt.Errorf("%w: range probe returned HTTP status %d: %s", ErrNonRetryable, resp.StatusCode, resp.Status)
+	}
 
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("probe failed with HTTP status %d: %s", resp.StatusCode, resp.Status)
@@ -176,6 +209,30 @@ func hasAcceptRanges(resp *http.Response) bool {
 	return strings.Contains(ar, "bytes")
 }
 
+func sanitizeFilename(name string) string {
+	name = strings.TrimSpace(name)
+	name = strings.ReplaceAll(name, "\\", "/")
+	name = path.Base(name)
+
+	// Replace illegal Windows and Unix path characters
+	var sb strings.Builder
+	for _, r := range name {
+		if r < 32 || r == '<' || r == '>' || r == ':' || r == '"' || r == '/' || r == '\\' || r == '|' || r == '?' || r == '*' {
+			sb.WriteRune('_')
+		} else {
+			sb.WriteRune(r)
+		}
+	}
+	sanitized := strings.TrimSpace(sb.String())
+	sanitized = strings.TrimRight(sanitized, ". ")
+
+	if sanitized == "" || sanitized == "." || sanitized == ".." {
+		return "downloaded_file"
+	}
+	return sanitized
+}
+
+
 func extractFilename(originalURL, finalURL, contentDisposition string) string {
 	// Try Content-Disposition header first
 	if contentDisposition != "" {
@@ -186,12 +243,19 @@ func extractFilename(originalURL, finalURL, contentDisposition string) string {
 					fn = fn[idx+2:]
 				}
 				if unescaped, err := url.PathUnescape(fn); err == nil {
-					return filepath.Base(unescaped)
+					fn = unescaped
 				}
-				return filepath.Base(fn)
+				if s := sanitizeFilename(fn); s != "downloaded_file" {
+					return s
+				}
 			}
 			if fn, ok := params["filename"]; ok && fn != "" {
-				return filepath.Base(fn)
+				if unescaped, err := url.PathUnescape(fn); err == nil {
+					fn = unescaped
+				}
+				if s := sanitizeFilename(fn); s != "downloaded_file" {
+					return s
+				}
 			}
 		}
 	}
@@ -202,9 +266,11 @@ func extractFilename(originalURL, finalURL, contentDisposition string) string {
 			cleaned := path.Base(parsed.Path)
 			if cleaned != "" && cleaned != "." && cleaned != "/" {
 				if unescaped, err := url.PathUnescape(cleaned); err == nil {
-					return unescaped
+					cleaned = unescaped
 				}
-				return cleaned
+				if s := sanitizeFilename(cleaned); s != "downloaded_file" {
+					return s
+				}
 			}
 		}
 	}
@@ -220,3 +286,4 @@ func applyHeaders(req *http.Request, opts *Options) {
 		req.Header.Set(k, v)
 	}
 }
+
