@@ -15,6 +15,12 @@ var (
 	// ErrEmptyURL indicates that the provided URL is empty.
 	ErrEmptyURL = errors.New("download URL cannot be empty")
 
+	// ErrInvalidURL indicates that the provided URL is malformed or uses an unsupported scheme.
+	ErrInvalidURL = errors.New("invalid download URL")
+
+	// ErrPrivateNetworkAccess indicates that the URL resolves to a private or local network address.
+	ErrPrivateNetworkAccess = errors.New("download URL targets a private or local network address")
+
 	// ErrZeroContentLength indicates that the remote resource reported 0 bytes.
 	ErrZeroContentLength = errors.New("resource content length is 0")
 
@@ -27,4 +33,3 @@ var (
 	// ErrNonRetryable indicates an error that should not be retried (e.g. 401, 403, 404).
 	ErrNonRetryable = errors.New("non-retryable HTTP error")
 )
-

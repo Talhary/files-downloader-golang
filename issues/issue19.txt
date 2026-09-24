@@ -1,0 +1,24 @@
+Issue #19: SAF folder picker is not wired up; fileDescriptor stays -1 and the chosen folder is ignored
+Severity: Medium
+Component: Android (storage/settings)
+Location: android/app/src/main/java/com/downloadengine/app/MainActivity.java:872-878, android/app/src/main/java/com/downloadengine/app/MainActivity.java:908-919, android/app/src/main/java/com/downloadengine/app/service/DownloadQueueManager.java:235-259
+
+Evidence:
+  The settings screen offers "Choose Custom Folder / SD Card (SAF)":
+
+      btnChangeStorage.setOnClickListener(v -> {
+          Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+          startActivityForResult(intent, 2001);
+      });
+
+  onActivityResult only takes the persistable permission and displays the URI
+  text; the URI is never stored (no SharedPreferences) and never used.
+  DownloadTask.fileDescriptor defaults to -1 and is never assigned anywhere,
+  so startTask() always takes the non-FD branch and writes to
+  SmartCategoryManager.getCategoryDir(...) instead.
+
+Impact:
+  The advertised "Scoped Storage & SAF" feature is inert: the user's chosen
+  tree (e.g. SD card) has no effect, and the entire DownloadToFD /
+  fileDescriptor JNI path is dead code. This is a functional gap versus the
+  README and leaves SD-card downloads impossible on Android 10+.

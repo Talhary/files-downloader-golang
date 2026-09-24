@@ -1,0 +1,23 @@
+Issue #24: Notification actions use a null icon and a vector drawable as the small icon
+Severity: Low
+Component: Android (service)
+Location: android/app/src/main/java/com/downloadengine/app/service/DownloadService.java:143-168, android/app/src/main/res/drawable/ic_launcher.xml
+
+Evidence:
+      builder.setSmallIcon(R.drawable.ic_launcher);   // vector drawable
+      ...
+      builder.addAction(new Notification.Action.Builder(null, "Pause", piPause).build());
+      builder.addAction(new Notification.Action.Builder(null, "Cancel", piCancel).build());
+
+  - setSmallIcon() requires a monochrome raster/VectorDrawable that the
+    platform can render as a status-bar icon; the app points at ic_launcher
+    (its launcher art), which on many OEMs renders as a white/garbled blob.
+  - Notification.Action.Builder(null, ...) passes a null Icon. On older
+    platforms this can crash or render a blank action button; the modern
+    API is Notification.Action.Builder(Icon, CharSequence, PendingIntent).
+
+Impact:
+  Poor/broken notification rendering and possible crashes on some API
+  levels; the action buttons may be invisible. Also the manifest's
+  roundIcon/icon both alias the same vector, which is not a valid adaptive
+  icon setup.

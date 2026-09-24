@@ -1,0 +1,23 @@
+Issue #23: Missing runtime permissions (POST_NOTIFICATIONS, storage) and the scheduler is dead code
+Severity: Medium
+Component: Android (manifest/service)
+Location: android/app/src/main/AndroidManifest.xml:18-24, android/app/src/main/AndroidManifest.xml:71-74, android/app/src/main/java/com/downloadengine/app/service/ScheduleReceiver.java
+
+Evidence:
+  - AndroidManifest declares POST_NOTIFICATIONS but the app never requests it
+    at runtime (no requestPermissions anywhere in MainActivity). On Android
+    13+ the foreground-service and completion notifications are suppressed
+    unless the user is prompted and grants it.
+  - READ/WRITE_EXTERNAL_STORAGE are declared/relevant but never requested;
+    SmartCategoryManager writes to the public Download folder relying on
+    requestLegacyExternalStorage (ignored on API 30+), so on modern devices
+    the public-folder test in getCategoryDir() fails and it silently falls
+    back to app-specific storage - which the user then can't easily find.
+  - android.permission.SCHEDULE_EXACT_ALARM / USE_EXACT_ALARM are declared
+    but no code ever schedules an alarm (AlarmManager is never referenced);
+    ScheduleReceiver only exists and is never triggered.
+
+Impact:
+  Notifications may silently not appear; downloads may land in an obscure
+  app-private folder; and the declared "scheduled downloads" feature is
+  non-functional while consuming privileged permissions.

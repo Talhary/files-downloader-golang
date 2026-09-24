@@ -1,0 +1,23 @@
+Issue #30: Dead layout, misleading component names, no Android/Python tests, no LICENSE
+Severity: Low
+Component: repo quality
+Location: android/app/src/main/res/layout/dialog_add_download.xml, android/app/src/main/java/com/downloadengine/app/MainActivity.java, android/app/src/main/res/layout/fragment_*.xml, repo root
+
+Evidence:
+  - res/layout/dialog_add_download.xml exists but is referenced nowhere:
+    MainActivity.showAddDownloadDialog inflates dialog_idm_download instead
+    (grep for "dialog_add_download" returns no Java hits). Same for
+    fragment_downloads/browser/files/settings: they are <include>d views in
+    activity_main, not real android.app.Fragment classes, so names are
+    misleading.
+  - Test coverage is Go-only (12 tests in pkg/engine). There are no tests for
+    the JNI bridge, the Android storage/service classes, or the Python SDK
+    (python/test_stream.py is a manual script that hits the live network).
+  - No LICENSE file exists at the repo root, while all sources carry no
+    per-file header; the project is otherwise public-looking.
+
+Impact:
+  Dead resources drift out of sync and confuse maintenance; the riskiest code
+  (JNI thread handling, FileProvider, checkpointing across process death) is
+  untested; and lack of a license makes reuse/distribution legally
+  ambiguous.

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DL Engine Pro</string>
+    <string name="tab_downloads">Downloads</string>
+    <string name="tab_browser">Browser</string>
+    <string name="tab_files">Files</string>
+    <string name="tab_settings">Settings</string>
+
+    <string name="action_download">Download</string>
+    <string name="action_pause">Pause</string>
+    <string name="action_resume">Resume</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_open">Open</string>
+    <string name="action_share">Share</string>
+    <string name="action_retry">Retry</string>
+
+    <string name="status_downloading">Downloading</string>
+    <string name="status_paused">Paused</string>
+    <string name="status_completed">Completed</string>
+    <string name="status_error">Error</string>
+    <string name="status_queued">Queued</string>
+
+    <string name="category_all">All</string>
+    <string name="category_videos">Videos</string>
+    <string name="category_music">Music</string>
+    <string name="category_docs">Documents</string>
+    <string name="category_archives">Archives</string>
+    <string name="category_apps">Apps</string>
+
+    <string name="setting_concurrency_title">Concurrent Chunk Connections</string>
+    <string name="setting_wifi_only_title">Download on Wi-Fi Only</string>
+    <string name="setting_wifi_only_desc">Pause downloads automatically when on mobile data</string>
+    <string name="setting_adblock_title">Ad &amp; Tracker Blocker</string>
+    <string name="setting_adblock_desc">Block popups, redirectors, and tracking scripts</string>
+    <string name="setting_storage_title">Download Storage Location</string>
+    <string name="setting_scheduler_title">Scheduled Downloads</string>
+
+    <string name="notif_channel_name">Active Downloads</string>
+    <string name="notif_channel_desc">Shows live download progress, speed, and actions</string>
+</resources>

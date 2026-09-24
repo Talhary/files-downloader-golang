@@ -1,0 +1,32 @@
+Issue #7: DownloadToFD single-stream path never truncates or seeks, leaving stale trailing bytes
+Severity: High
+Component: Go engine (pkg/engine)
+Location: pkg/engine/fd_sink.go:263-325, pkg/engine/fd_sink.go:28-45
+
+Evidence:
+  DownloadToFD wraps a caller-owned fd:
+
+      file := os.NewFile(uintptr(fd), info.Filename)
+      ...
+      if !info.AcceptRanges || info.ContentLength <= 0 || e.opts.Concurrency <= 1 {
+          err = e.downloadSingleStreamToFileHandle(ctx, info.FinalURL, file, info)
+      }
+
+  downloadSingleStreamToFileHandle writes sequentially from the file's
+  current position and calls file.Sync(). It never calls file.Truncate(0) or
+  file.Seek(0, io.SeekStart).
+
+  In the multipart path downloadMultipartToFileHandleWithCheckpoint truncates
+  only for a *new* (cp == nil) download, and it writes via io.NewOffsetWriter
+  so position is irrelevant - but the incoming fd position for a recycled
+  descriptor is undefined. For SAF, DocumentFile/ParcelFileDescriptor may
+  hand back an fd whose offset is not 0 (and for a pre-existing document the
+  file may already contain bytes).
+
+Impact:
+  When overwriting an existing destination document (SAF "create/overwrite")
+  with a server that does not support ranges (or ContentLength == 0), the
+  single-stream path appends at the wrong offset. If the new payload is
+  shorter than the old one, stale trailing bytes remain, yielding a corrupt
+  file. The multipart path can also write at stale offsets if the fd's
+  position is non-zero for a fresh download.

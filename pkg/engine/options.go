@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"context"
 	"crypto/tls"
+	"errors"
 	"net"
 	"net/http"
 	"time"
@@ -19,7 +21,7 @@ const (
 	DefaultProgressInterval = 200 * time.Millisecond
 	DefaultCopyBufferSize   = 64 * 1024 // 64 KB
 	DefaultStreamPrefetch   = 4         // Number of chunks prefetched in memory
-	DefaultUserAgent        = "DownloadEngine/1.1 (+https://github.com/download-engine)"
+	DefaultUserAgent        = "DownloadEngine/1.1.0 (+https://github.com/Talhary/files-downloader-golang)"
 	DefaultConnectTimeout   = 15 * time.Second
 	DefaultLinkTimeout      = 30 * time.Second // HTTP response header timeout
 	DefaultIdleTimeout      = 30 * time.Second // Read stall timeout per chunk
@@ -28,17 +30,17 @@ const (
 
 // ProgressSnapshot contains a snapshot of download progress at a given moment.
 type ProgressSnapshot struct {
-	TotalBytes      int64         // Total size of the file in bytes (0 if unknown)
-	DownloadedBytes int64         // Total bytes downloaded so far
-	Percent         float64       // Progress percentage (0 - 100)
-	SpeedBytesPerSec float64      // Current smoothed download speed in bytes/sec
-	ETA             time.Duration // Estimated time remaining
-	Elapsed         time.Duration // Total elapsed time
-	ActiveWorkers   int           // Number of active workers currently downloading
-	TotalChunks     int           // Total number of chunks
-	CompletedChunks int           // Number of completed chunks
-	Done            bool          // True if download completed
-	Err             error         // Error if download failed
+	TotalBytes       int64         // Total size of the file in bytes (0 if unknown)
+	DownloadedBytes  int64         // Total bytes downloaded so far
+	Percent          float64       // Progress percentage (0 - 100)
+	SpeedBytesPerSec float64       // Current smoothed download speed in bytes/sec
+	ETA              time.Duration // Estimated time remaining
+	Elapsed          time.Duration // Total elapsed time
+	ActiveWorkers    int           // Number of active workers currently downloading
+	TotalChunks      int           // Total number of chunks
+	CompletedChunks  int           // Number of completed chunks
+	Done             bool          // True if download completed
+	Err              error         // Error if download failed
 }
 
 // ProgressCallback is invoked periodically with progress snapshots.
@@ -46,24 +48,25 @@ type ProgressCallback func(snapshot ProgressSnapshot)
 
 // Options holds configuration for the download engine.
 type Options struct {
-	Concurrency      int
-	ChunkSize        int64
-	MaxRetries       int
-	RetryDelay       time.Duration
-	Timeout          time.Duration // Overall operation timeout (0 = unlimited)
-	ConnectTimeout   time.Duration // TCP connect and TLS handshake timeout
-	LinkTimeout      time.Duration // HTTP response header timeout
-	IdleTimeout      time.Duration // Per-read stall timeout during chunk downloading
-	ProbeTimeout     time.Duration // Probe metadata timeout
-	Insecure         bool          // Allow insecure TLS certificates (InsecureSkipVerify)
-	HTTPClient       *http.Client
-	Headers          map[string]string
-	UserAgent        string
-	CopyBufferSize   int
-	StreamPrefetch   int
-	ProgressFunc     ProgressCallback
-	ProgressInterval time.Duration
-	AutoRename       bool // Auto-generate filename if destination is a directory
+	Concurrency       int
+	ChunkSize         int64
+	MaxRetries        int
+	RetryDelay        time.Duration
+	Timeout           time.Duration // Overall operation timeout (0 = unlimited)
+	ConnectTimeout    time.Duration // TCP connect and TLS handshake timeout
+	LinkTimeout       time.Duration // HTTP response header timeout
+	IdleTimeout       time.Duration // Per-read stall timeout during chunk downloading
+	ProbeTimeout      time.Duration // Probe metadata timeout
+	Insecure          bool          // Allow insecure TLS certificates (InsecureSkipVerify)
+	HTTPClient        *http.Client
+	Headers           map[string]string
+	UserAgent         string
+	CopyBufferSize    int
+	StreamPrefetch    int
+	ProgressFunc      ProgressCallback
+	ProgressInterval  time.Duration
+	AutoRename        bool // Rename to "name (n).ext" when the destination exists
+	AllowPrivateHosts bool // Allow loopback, private, link-local, and other non-public IP targets
 }
 
 // Option is a functional option for configuring the engine.
@@ -72,22 +75,23 @@ type Option func(*Options)
 // DefaultOptions returns a new Options struct initialized with robust defaults.
 func DefaultOptions() *Options {
 	opts := &Options{
-		Concurrency:      DefaultConcurrency,
-		ChunkSize:        DefaultChunkSize,
-		MaxRetries:       DefaultMaxRetries,
-		RetryDelay:       DefaultRetryDelay,
-		Timeout:          0,
-		ConnectTimeout:   DefaultConnectTimeout,
-		LinkTimeout:      DefaultLinkTimeout,
-		IdleTimeout:      DefaultIdleTimeout,
-		ProbeTimeout:     DefaultProbeTimeout,
-		Insecure:         false,
-		Headers:          make(map[string]string),
-		UserAgent:        DefaultUserAgent,
-		CopyBufferSize:   DefaultCopyBufferSize,
-		StreamPrefetch:   DefaultStreamPrefetch,
-		ProgressInterval: DefaultProgressInterval,
-		AutoRename:       true,
+		Concurrency:       DefaultConcurrency,
+		ChunkSize:         DefaultChunkSize,
+		MaxRetries:        DefaultMaxRetries,
+		RetryDelay:        DefaultRetryDelay,
+		Timeout:           0,
+		ConnectTimeout:    DefaultConnectTimeout,
+		LinkTimeout:       DefaultLinkTimeout,
+		IdleTimeout:       DefaultIdleTimeout,
+		ProbeTimeout:      DefaultProbeTimeout,
+		Insecure:          false,
+		Headers:           make(map[string]string),
+		UserAgent:         DefaultUserAgent,
+		CopyBufferSize:    DefaultCopyBufferSize,
+		StreamPrefetch:    DefaultStreamPrefetch,
+		ProgressInterval:  DefaultProgressInterval,
+		AutoRename:        true,
+		AllowPrivateHosts: false,
 	}
 	opts.ReconfigureTransport()
 	return opts
@@ -116,10 +120,23 @@ func (o *Options) ReconfigureTransport() {
 	if connTimeout <= 0 {
 		connTimeout = DefaultConnectTimeout
 	}
-	tr.DialContext = (&net.Dialer{
+	dialer := &net.Dialer{
 		Timeout:   connTimeout,
 		KeepAlive: 30 * time.Second,
-	}).DialContext
+	}
+	tr.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		if !o.AllowPrivateHosts {
+			host, port, err := net.SplitHostPort(address)
+			if err != nil {
+				return nil, err
+			}
+			if err := validateHostAddresses(ctx, host, o.AllowPrivateHosts); err != nil {
+				return nil, err
+			}
+			address = net.JoinHostPort(host, port)
+		}
+		return dialer.DialContext(ctx, network, address)
+	}
 	tr.TLSHandshakeTimeout = connTimeout
 
 	linkTimeout := o.LinkTimeout
@@ -133,8 +150,21 @@ func (o *Options) ReconfigureTransport() {
 	} else {
 		tr.TLSClientConfig.InsecureSkipVerify = o.Insecure
 	}
-}
 
+	previousRedirect := o.HTTPClient.CheckRedirect
+	o.HTTPClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if err := validateDownloadURL(req.URL.String(), o.AllowPrivateHosts); err != nil {
+			return err
+		}
+		if previousRedirect != nil {
+			return previousRedirect(req, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
+}
 
 // WithConcurrency sets the number of parallel download workers.
 func WithConcurrency(workers int) Option {
@@ -287,3 +317,10 @@ func WithInsecure(insecure bool) Option {
 	}
 }
 
+// WithAllowPrivateHosts permits downloads from loopback, private, and link-local network addresses.
+func WithAllowPrivateHosts(allow bool) Option {
+	return func(o *Options) {
+		o.AllowPrivateHosts = allow
+		o.ReconfigureTransport()
+	}
+}

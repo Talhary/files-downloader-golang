@@ -1,0 +1,32 @@
+Issue #17: JNI callback threads are never detached and callback exceptions are unchecked
+Severity: High
+Component: Android / JNI
+Location: cmd/libdlengine/jni_bridge.c:35-58, cmd/libdlengine/jni_bridge.c:60-88
+
+Evidence:
+  getJNIEnv() attaches the current thread when JNI_EDETACHED:
+
+      if (res == JNI_EDETACHED) {
+          if ((*g_jvm)->AttachCurrentThread(g_jvm, &env, NULL) != 0) return NULL;
+      }
+
+  The Go worker goroutines are arbitrary OS threads. AttachCurrentThread is
+  called on every callback, but DetachCurrentThread is never called anywhere
+  in the file. Each distinct attached thread that exits after a callback
+  leaves a JNI thread attachment behind (until process exit).
+
+  Additionally, none of notifyJavaProgress/Completed/Error call
+  (*env)->ExceptionCheck()/ExceptionClear() after CallVoidMethod. If the Java
+  callback throws (e.g. a listener NPE, or DownloadQueueManager touches a
+  destroyed state), the pending exception is left set; the next JNI call on
+  that thread returns garbage/fails and the app aborts.
+
+Impact:
+  Thread-attachment leaks over long download sessions and potential
+  "JNI ERROR (app bug): ... pending exception" aborts. Crashes inside Java
+  callbacks are silently swallowed or crash later at an unrelated JNI call,
+  making diagnosis very hard.
+
+  Note: this is C code compiled to libdlengine.so via cgo; the callbacks run
+  on Go-owned threads, so proper attach/detach (or global-ref + Java-side
+  dispatch) is required.

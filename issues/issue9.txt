@@ -1,0 +1,34 @@
+Issue #9: Python stream()/stream_async() leak the child process when the consumer stops early
+Severity: High
+Component: Python SDK (python/dlengine.py)
+Location: python/dlengine.py:522-538, python/dlengine.py:624-640
+
+Evidence:
+  Both streaming generators drive the engine only inside a try/except:
+
+      try:
+          while True:
+              chunk = process.stdout.read(buffer_size)
+              if not chunk:
+                  break
+              yield chunk
+          process.wait()
+          ...
+      except Exception:
+          process.kill()
+          raise
+
+  A generator that is broken out of (`for chunk in engine.stream(...): break`),
+  closed, or garbage-collected raises GeneratorExit at the `yield` - which is
+  a BaseException, not Exception. The `except Exception` handler is skipped,
+  so `process.kill()`/`process.wait()` never run.
+
+  The project's own python/test_stream.py consumes exactly 20 MB and then
+  breaks, which triggers this path.
+
+Impact:
+  The dlengine child process (and its worker goroutines/sockets) keeps
+  running, downloading and buffering to a stalled pipe, until the engine
+  errors or the interpreter exits. In a server (FastAPI StreamingResponse
+  client disconnect) this leaks a process and network connections per
+  aborted stream. stream_async has the identical bug.

@@ -1,0 +1,26 @@
+Issue #5: No URL scheme / host validation - SSRF and non-HTTP schemes accepted
+Severity: High
+Component: Go engine (pkg/engine) + CLI
+Location: pkg/engine/probe.go:30-36, pkg/engine/file_sink.go:150-159, cmd/dlengine/main.go:114-122
+
+Evidence:
+  The only validation of the input URL is a non-empty check:
+
+      if strings.TrimSpace(rawURL) == "" { return nil, ErrEmptyURL }
+
+  http.NewRequestWithContext accepts any absolute URL, and the client will
+  follow redirects. There is no allow-list of schemes (http/https) and no
+  restriction on targets. Additionally the Android app and CLI happily
+  download `file://` (the default Go client returns an error for unknown
+  schemes, but this is not the same as validating), and `http://` to
+  loopback/private ranges is unrestricted.
+
+Impact:
+  - SSRF: a server-side deployment (the GitHub Actions "download-worker"
+    and any FastAPI/bot integration) can be pointed at
+    http://169.254.169.254/ (cloud metadata), http://localhost:port/admin,
+    or internal hosts.
+  - Because redirects are followed automatically, an attacker-controlled
+    initial URL can pivot to arbitrary internal targets.
+  - No scheme allow-list means URLs are passed to the transport
+    unfiltered, contrary to user expectation.

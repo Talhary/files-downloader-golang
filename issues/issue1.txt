@@ -1,0 +1,31 @@
+Issue #1: Final progress snapshot never reports the real download error
+Severity: Medium
+Component: Go engine (pkg/engine)
+Location: pkg/engine/file_sink.go:72-74, pkg/engine/file_sink.go:173-176, pkg/engine/fd_sink.go:175-177
+
+Evidence:
+  In downloadMultipartToFile the deferred stop is written as:
+
+      file, err := os.OpenFile(destPath, ...)   // line 56
+      ...
+      defer func() { tracker.Stop(err) }()      // line 72-74
+
+  `err` here is the result of os.OpenFile only. It is never reassigned
+  afterwards (the real failure is stored in the separate `downloadErr`
+  variable). The closure therefore passes nil to Stop() even when the
+  download failed.
+
+  The same pattern appears in downloadSingleStreamToFile (line 173-176,
+  where `err` is the last HTTP GET result) and in
+  downloadSingleStreamToFileHandle (fd_sink.go:175-177).
+
+  downloadMultipartToFileHandleWithCheckpoint hard-codes Stop(nil) at
+  fd_sink.go:175-177 regardless of outcome.
+
+Impact:
+  ProgressCallback receives a final ProgressSnapshot with Err == nil and
+  Done == false even on failure. Any UI/SDK that relies on the callback to
+  detect completion or surface the error will silently show a stalled or
+  "successful" final state. The Python/Node integrations that read error
+  events from JSON output are unaffected (CLI emits its own error event),
+  but Go API consumers and the Android progress path are.

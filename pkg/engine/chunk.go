@@ -30,6 +30,12 @@ func (c *Chunk) RangeHeader() string {
 func (c *Chunk) SetDownloaded(bytes int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if bytes < 0 {
+		bytes = 0
+	}
+	if bytes > c.Size() {
+		bytes = c.Size()
+	}
 	c.Downloaded = bytes
 }
 

@@ -1,0 +1,33 @@
+Issue #16: Custom DownloadFileProvider exposes absolute filesystem paths and is over-broad
+Severity: High
+Component: Android (storage)
+Location: android/app/src/main/java/com/downloadengine/app/storage/DownloadFileProvider.java:19-43, android/app/src/main/res/xml/file_paths.xml:2-7
+
+Evidence:
+  Rather than using FileProvider.getUriForFile(), the app builds URIs from the
+  raw absolute path:
+
+      public static Uri getUriForFile(File file) {
+          return new Uri.Builder()
+                  .scheme("content")
+                  .authority(AUTHORITY)
+                  .path(file.getAbsolutePath())   // e.g. /storage/emulated/0/Download/...
+                  .build();
+      }
+
+  openFile() then does `new File(uri.getPath())` and opens it - no
+  canonicalization and no confinement to the declared roots. file_paths.xml
+  additionally declares `<external-path name="external_files" path="." />`
+  (the entire external storage).
+
+  The provider is android:exported="false" and grantUriPermissions="true",
+  so a granted URI is handed to other apps (share/open intents).
+
+Impact:
+  - The content:// URI leaks the absolute path of the file.
+  - Because getUriForFile only string-builds a URI, any component able to
+    reach the provider with a crafted path (and a leaked/guessed grant) can
+    request arbitrary readable files. Combined with the broad `path="."`
+    root this defeats the point of the provider.
+  - The manual MatrixCursor query is also unguarded (no column projection
+    validation), unlike the framework FileProvider.

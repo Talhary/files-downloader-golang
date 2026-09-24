@@ -97,6 +97,8 @@ func main() {
 	flag.StringVar(&probeTimeoutStr, "probe-timeout", "15s", "Probe metadata request timeout (e.g. '15s')")
 	flag.BoolVar(&insecure, "k", false, "Allow insecure TLS certificates (InsecureSkipVerify)")
 	flag.BoolVar(&insecure, "insecure", false, "Allow insecure TLS certificates (InsecureSkipVerify)")
+	var allowPrivateHosts bool
+	flag.BoolVar(&allowPrivateHosts, "allow-private-hosts", false, "Allow loopback, private, and local host targets")
 
 	flag.Parse()
 
@@ -151,6 +153,7 @@ func main() {
 	probeOpts := engine.DefaultOptions()
 	probeOpts.Headers = headersFlag.toMap()
 	probeOpts.Insecure = insecure
+	probeOpts.AllowPrivateHosts = allowPrivateHosts
 	probeOpts.ConnectTimeout = connectTimeout
 	probeOpts.LinkTimeout = linkTimeout
 	probeOpts.ProbeTimeout = probeTimeout
@@ -237,6 +240,7 @@ func main() {
 		engine.WithIdleTimeout(idleTimeout),
 		engine.WithProbeTimeout(probeTimeout),
 		engine.WithTimeout(downloadTimeout),
+		engine.WithAllowPrivateHosts(allowPrivateHosts),
 		engine.WithProgressCallback(func(s engine.ProgressSnapshot) {
 			if jsonMode {
 				emitJSON(JSONEvent{

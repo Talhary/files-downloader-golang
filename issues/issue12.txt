@@ -1,0 +1,27 @@
+Issue #12: download() reads stdout to EOF before touching stderr, risking a pipe deadlock
+Severity: Medium
+Component: Python SDK (python/dlengine.py)
+Location: python/dlengine.py:253-320
+
+Evidence:
+      process = subprocess.Popen(cmd, stdout=PIPE, stderr=PIPE, text=True, bufsize=1, ...)
+      try:
+          for line in process.stdout:        # drains stdout to EOF
+              ...
+          process.wait(timeout=wait_timeout)
+          if process.returncode != 0:
+              stderr_output = process.stderr.read()   # stderr only read AFTER wait
+              ...
+
+  stdout is consumed in a complete pass, and stderr is not read until after
+  process.wait(). In JSON mode the CLI normally writes all events to stdout
+  and nothing to stderr, so this is usually fine - but any engine path that
+  writes a lot to stderr (usage text, Go runtime messages, a panic trace,
+  or the WARNING lines some environments add) can fill the OS pipe buffer
+  (64 KB on Linux) before stdout is exhausted. The child then blocks writing
+  to stderr while the parent blocks reading stdout.
+
+Impact:
+  Deadlock in download() (and the subsequent stderr.read() is on a pipe that
+  nobody is draining concurrently). The streaming methods avoid this by
+  draining stderr in a background thread; download() does not.

@@ -1,0 +1,23 @@
+Issue #14: Release signing keystore is committed with a hardcoded, public password
+Severity: Critical
+Component: Android build / repo
+Location: android/release.keystore, android/build.ps1:41-44, android/build.ps1:138
+
+Evidence:
+  android/build.ps1 generates the release keystore with fixed credentials:
+
+      & "$JdkBin\keytool.exe" -genkeypair -keystore $Keystore \
+        -storepass dlengine123 -keypass dlengine123 -alias dlengine \
+        -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=DownloadEngine, ..."
+
+  and signs with `--ks-pass "pass:dlengine123"`.
+
+  android/release.keystore is present in the repository (confirmed untracked
+  but on disk; the .gitignore does not exclude *.keystore or *.jks), and the
+  built APK plus .idsig are committed under android/bin/.
+
+Impact:
+  Anyone with the repo can produce APKs signed with the same key/password,
+  i.e. forge "official" updates and malware that Android accepts as the same
+  app. This breaks the entire update-trust chain. App-signing keys and
+  passwords must never be committed.

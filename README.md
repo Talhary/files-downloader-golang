@@ -19,7 +19,7 @@ A high-performance, resilient, and modular multi-part download and streaming eng
 - **💾 Dual Output Modes**:
   - **Direct File (`DownloadToFile`)**: Uses `os.File.WriteAt` (`io.NewOffsetWriter`) for direct random-access writing into pre-allocated disk files without temporary chunk files or assembly delays.
   - **Sequential Streaming (`DownloadStream` / `DownloadToWriter`)**: Produces an `io.ReadCloser` that emits bytes in strict sequential order `0..N` while downloading chunks ahead in the background with memory backpressure control.
-- **🐧 Linux Ubuntu & GitHub Actions Ready**: Pre-compiled standalone static binaries for Linux (amd64/arm64) and Windows with GitHub Actions workflow template included.
+- **🐧 Linux Ubuntu & GitHub Actions Ready**: Release builds include standalone static binaries for Linux, Windows, and macOS.
 - **🐍 Python SDK (`python/dlengine.py`)**: Synchronous and asynchronous (`download_async`, `stream_async`) high-level controllers with live callbacks.
 - **📊 Real-Time CLI Dashboard**: Visual progress bar, instantaneous & smoothed EMA speeds (MB/s), ETA calculation, active worker count, and chunk completion stats.
 
@@ -27,20 +27,25 @@ A high-performance, resilient, and modular multi-part download and streaming eng
 
 ## 📚 Detailed Documentation
 
-- **[CLI & Deployment Documentation (docs/CLI.md)](file:///d:/download-engine/docs/CLI.md)**: Full reference for all CLI flags, timeout tuning, Ubuntu / GitHub Actions CI/CD setup, JSON event schemas, Python SDK, Node.js integration, and performance tuning.
-- **[Python Integration Guide (docs/PYTHON_GUIDE.md)](file:///d:/download-engine/docs/PYTHON_GUIDE.md)**: Guide and recipes for `download()`, `download_async()`, `stream()`, `stream_async()`, and `tqdm` integration.
+- **[CLI & Deployment Documentation (docs/CLI.md)](docs/CLI.md)**: Full reference for all CLI flags, timeout tuning, Ubuntu / GitHub Actions CI/CD setup, JSON event schemas, Python SDK, Node.js integration, and performance tuning.
+- **[Python Integration Guide (docs/PYTHON_GUIDE.md)](docs/PYTHON_GUIDE.md)**: Guide and recipes for `download()`, `download_async()`, `stream()`, `stream_async()`, and `tqdm` integration.
+- **[License](LICENSE)**: MIT license.
 
 ---
 
 ## 📦 Pre-Built Binaries
 
-Pre-compiled standalone binaries (`CGO_ENABLED=0`) are available in `./bin/`:
+Standalone release binaries (`CGO_ENABLED=0`) are published with each Git tag:
 
 | Binary | Platform | Notes |
 |---|---|---|
-| `bin/dlengine-linux-amd64` | Linux x86_64 / Ubuntu | **GitHub Actions (`ubuntu-latest`)**, Docker, Cloud VMs |
-| `bin/dlengine-linux-arm64` | Linux ARM64 | AWS Graviton, Raspberry Pi, Apple Silicon containers |
-| `bin/dlengine-windows-amd64.exe` | Windows x64 | Windows 10/11/Server CLI |
+| `dlengine-linux-amd64` | Linux x86_64 / Ubuntu | Docker, Cloud VMs |
+| `dlengine-linux-arm64` | Linux ARM64 | AWS Graviton, Raspberry Pi, Apple Silicon containers |
+| `dlengine-windows-amd64.exe` | Windows x64 | Windows 10/11/Server CLI |
+| `dlengine-darwin-amd64` | macOS Intel | Homebrew or direct download |
+| `dlengine-darwin-arm64` | macOS Apple Silicon | Homebrew or direct download |
+
+Download them from the repository's [GitHub Releases](https://github.com/Talhary/files-downloader-golang/releases).
 
 To recompile all binaries at once:
 ```powershell

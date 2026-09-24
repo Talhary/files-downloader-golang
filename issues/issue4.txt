@@ -1,0 +1,25 @@
+Issue #4: No Content-Range validation - server returning a wrong range silently corrupts the file
+Severity: High
+Component: Go engine (pkg/engine)
+Location: pkg/engine/worker.go:112-119, pkg/engine/worker.go:172-175
+
+Evidence:
+  attemptDownloadChunk accepts any 206 response and only checks that the
+  number of bytes read equals the requested chunk size:
+
+      if resp.StatusCode == http.StatusPartialContent && totalRead != expectedBytes {
+          return fmt.Errorf("chunk %d size mismatch ...", ...)
+      }
+
+  It never inspects the Content-Range response header, so it does not verify
+  that the returned range actually starts at chunk.Start. A server (or a
+  misbehaving proxy/CDN) that answers a request for `bytes=1048576-2097151`
+  with `Content-Range: bytes 0-1048575/N` and the correct byte count will be
+  accepted and written at chunk.Start, producing a file assembled from the
+  wrong regions.
+
+Impact:
+  Silent data corruption with no error returned. For archives/executables
+  this yields a file that downloads "successfully" but is unusable. The
+  bit-for-bit tests in engine_test.go only exercise well-behaved servers, so
+  this is not covered.

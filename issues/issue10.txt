@@ -1,0 +1,22 @@
+Issue #10: download() timeout handling is inconsistent and can raise a raw TimeoutExpired
+Severity: Medium
+Component: Python SDK (python/dlengine.py)
+Location: python/dlengine.py:305-306, python/dlengine.py:149-154
+
+Evidence:
+      wait_timeout = float(timeout) if isinstance(timeout, (int, float)) else None
+      process.wait(timeout=wait_timeout)
+
+  `timeout` is documented and typed as Union[float, int, str] and
+  _format_timeout converts it to a string for the CLI. But wait() only
+  honors numeric timeouts: a string like "15m" yields wait_timeout=None, so
+  the Python side waits forever if the CLI itself is wedged (e.g. probe
+  hang before --timeout applies, or a bug in the CLI). Conversely, a numeric
+  timeout raises subprocess.TimeoutExpired, which is not wrapped in
+  DownloadEngineError and is caught by the bare `except Exception: kill()`
+  without preserving a useful message.
+
+Impact:
+  Inconsistent timeout semantics between CLI and SDK; callers catching
+  DownloadEngineError miss TimeoutExpired; string timeouts (the documented
+  usage, e.g. timeout="10m" in the README) provide no Python-side guard.

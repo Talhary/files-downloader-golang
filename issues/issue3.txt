@@ -1,0 +1,21 @@
+Issue #3: Resume is only chunk-granular; Chunk.SetDownloaded is dead code and docs overstate capability
+Severity: Medium
+Component: Go engine (pkg/engine)
+Location: pkg/engine/chunk.go:29-41, pkg/engine/worker.go:55-61, pkg/engine/checkpoint.go:76-89
+
+Evidence:
+  Chunk exposes SetDownloaded()/GetDownloaded() for mid-chunk progress, but
+  SetDownloaded is never called anywhere in the engine. During a chunk
+  download the only progress write is tracker.AddBytes(); the Chunk object
+  itself is untouched until downloadChunk calls chunk.MarkCompleted(), which
+  sets Downloaded = Size().
+
+  Because Checkpoint.SyncFromChunks copies chunk.GetDownloaded(), an
+  interrupted (partially downloaded) chunk is persisted as Downloaded == 0.
+
+Impact:
+  On pause/resume, every partially downloaded chunk is discarded and
+  re-downloaded from its start offset. The README/android README claim
+  resume "at exact chunk byte offsets" and "at exact byte offsets", which is
+  not what happens. Wasted bandwidth on large chunks and misleading
+  documentation. (The current on-disk data is not corrupt, only oversized.)

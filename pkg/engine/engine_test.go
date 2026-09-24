@@ -11,8 +11,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -101,6 +103,7 @@ func TestMultipartDownloadToFile(t *testing.T) {
 
 	var progressUpdates int32
 	opts := []Option{
+		WithAllowPrivateHosts(true),
 		WithConcurrency(4),
 		WithChunkSize(512 * 1024), // 512 KB chunks = 10 chunks
 		WithProgressCallback(func(s ProgressSnapshot) {
@@ -140,6 +143,7 @@ func TestStreamReader(t *testing.T) {
 	defer server.Close()
 
 	eng := New(
+		WithAllowPrivateHosts(true),
 		WithConcurrency(4),
 		WithChunkSize(256*1024), // 8 chunks
 		WithStreamPrefetch(3),
@@ -176,6 +180,7 @@ func TestDownloadToWriter(t *testing.T) {
 	defer server.Close()
 
 	eng := New(
+		WithAllowPrivateHosts(true),
 		WithConcurrency(4),
 		WithChunkSize(128*1024),
 	)
@@ -209,7 +214,7 @@ func TestSingleStreamFallback(t *testing.T) {
 	tempDir := t.TempDir()
 	destFile := filepath.Join(tempDir, "fallback.txt")
 
-	eng := New(WithConcurrency(4))
+	eng := New(WithAllowPrivateHosts(true), WithConcurrency(4))
 	ctx := context.Background()
 
 	info, err := eng.DownloadToFile(ctx, server.URL+"/fallback.txt", destFile)
@@ -270,6 +275,7 @@ func TestRetryOnTransientFailure(t *testing.T) {
 	destFile := filepath.Join(tempDir, "retry-test.bin")
 
 	eng := New(
+		WithAllowPrivateHosts(true),
 		WithMaxRetries(3),
 		WithRetryDelay(10*time.Millisecond),
 	)
@@ -337,7 +343,8 @@ func TestLinkTimeout(t *testing.T) {
 	defer server.Close()
 
 	eng := New(
-		WithLinkTimeout(100 * time.Millisecond),
+		WithAllowPrivateHosts(true),
+		WithLinkTimeout(100*time.Millisecond),
 		WithMaxRetries(0),
 	)
 
@@ -361,22 +368,24 @@ func TestIdleTimeoutRetry(t *testing.T) {
 		}
 
 		call := attemptCount.Add(1)
-		w.Header().Set("Content-Range", fmt.Sprintf("bytes 0-%d/%d", len(testData)-1, len(testData)))
+		var start, end int64
+		_, _ = fmt.Sscanf(r.Header.Get("Range"), "bytes=%d-%d", &start, &end)
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(testData)))
 		w.WriteHeader(http.StatusPartialContent)
 
 		if call == 1 {
 			// First call: write partial bytes, then stall
-			_, _ = w.Write(testData[:10])
+			_, _ = w.Write(testData[start : start+10])
 			if f, ok := w.(http.Flusher); ok {
 				f.Flush()
 			}
 			time.Sleep(400 * time.Millisecond) // Exceeds 100ms idle timeout
-			_, _ = w.Write(testData[10:])
+			_, _ = w.Write(testData[start+10:])
 			return
 		}
 
 		// Subsequent call: write immediately
-		_, _ = w.Write(testData)
+		_, _ = w.Write(testData[start:])
 	}))
 	defer server.Close()
 
@@ -384,9 +393,10 @@ func TestIdleTimeoutRetry(t *testing.T) {
 	destFile := filepath.Join(tempDir, "idle_test.bin")
 
 	eng := New(
-		WithIdleTimeout(100 * time.Millisecond),
+		WithAllowPrivateHosts(true),
+		WithIdleTimeout(100*time.Millisecond),
 		WithMaxRetries(2),
-		WithRetryDelay(10 * time.Millisecond),
+		WithRetryDelay(10*time.Millisecond),
 	)
 
 	_, err := eng.DownloadToFile(context.Background(), server.URL, destFile)
@@ -446,6 +456,7 @@ func TestRetryIntegrityAndOffset(t *testing.T) {
 	destFile := filepath.Join(tempDir, "offset_integrity.bin")
 
 	eng := New(
+		WithAllowPrivateHosts(true),
 		WithConcurrency(2),
 		WithChunkSize(256*1024), // 2 chunks: 0-262143 and 262144-524287
 		WithMaxRetries(3),
@@ -479,6 +490,10 @@ func TestSanitizeFilename(t *testing.T) {
 		{"<illegal>|chars*.txt", "_illegal__chars_.txt"},
 		{"", "downloaded_file"},
 		{"...", "downloaded_file"},
+		{"NUL.rar", "_NUL.rar"},
+		{"con.txt", "_con.txt"},
+		{"COM1", "_COM1"},
+		{"lpt9.log", "_lpt9.log"},
 	}
 
 	for _, tc := range tests {
@@ -490,12 +505,23 @@ func TestSanitizeFilename(t *testing.T) {
 
 	// Test extractFilename with URL containing query string and fragment
 	u := "https://example.com/downloads/archive.tar.gz?nocache=123#frag"
-	extracted := extractFilename(u, u, "")
+	extracted := extractFilename(u, u, "", "")
 	if extracted != "archive.tar.gz" {
 		t.Errorf("extractFilename() = %q; want archive.tar.gz", extracted)
 	}
-}
 
+	// Test query param filename extraction
+	qUrl := "https://example.com/download?file=document.pdf"
+	if ext := extractFilename(qUrl, qUrl, "", ""); ext != "document.pdf" {
+		t.Errorf("extractFilename() = %q; want document.pdf", ext)
+	}
+
+	// Test Content-Type extension inference when URL has no extension
+	streamUrl := "https://example.com/video/stream"
+	if ext := extractFilename(streamUrl, streamUrl, "", "video/mp4"); ext != "stream.mp4" {
+		t.Errorf("extractFilename() = %q; want stream.mp4", ext)
+	}
+}
 
 func TestNonRetryableError(t *testing.T) {
 	var requestCount atomic.Int32
@@ -507,6 +533,7 @@ func TestNonRetryableError(t *testing.T) {
 	defer server.Close()
 
 	eng := New(
+		WithAllowPrivateHosts(true),
 		WithMaxRetries(5),
 		WithRetryDelay(10*time.Millisecond),
 	)
@@ -526,3 +553,326 @@ func TestNonRetryableError(t *testing.T) {
 	}
 }
 
+func TestPauseAndResumeCheckpoint(t *testing.T) {
+	testData := make([]byte, 1024*1024) // 1 MB
+	for i := range testData {
+		testData[i] = byte(i % 256)
+	}
+
+	var chunkRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Accept-Ranges", "bytes")
+		w.Header().Set("ETag", "\"test-etag-123\"")
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", strconv.Itoa(len(testData)))
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		rangeHeader := r.Header.Get("Range")
+		var start, end int64
+		_, _ = fmt.Sscanf(rangeHeader, "bytes=%d-%d", &start, &end)
+
+		chunkRequests.Add(1)
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(testData)))
+		w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write(testData[start : end+1])
+	}))
+	defer server.Close()
+
+	tempDir := t.TempDir()
+	destFile := filepath.Join(tempDir, "resumable.bin")
+	stateFile := filepath.Join(tempDir, "resumable.bin.dlstate.json")
+
+	// Phase 1: Simulate partial download where first chunk (256KB) completed
+	chunkSize := int64(256 * 1024)
+	file, err := os.Create(destFile)
+	if err != nil {
+		t.Fatalf("creating dest file: %v", err)
+	}
+	// Write first 256KB
+	_, _ = file.Write(testData[:chunkSize])
+	_ = file.Truncate(int64(len(testData)))
+	file.Close()
+
+	// Write checkpoint file showing chunk 0 completed, chunks 1..3 remaining
+	totalChunks := 4
+	chunks := make([]*ChunkState, totalChunks)
+	for i := 0; i < totalChunks; i++ {
+		start := int64(i) * chunkSize
+		end := start + chunkSize - 1
+		completed := (i == 0)
+		downloaded := int64(0)
+		if completed {
+			downloaded = chunkSize
+		}
+		chunks[i] = &ChunkState{
+			Index:      i,
+			Start:      start,
+			End:        end,
+			Downloaded: downloaded,
+			Completed:  completed,
+		}
+	}
+
+	cp := &Checkpoint{
+		URL:           server.URL,
+		FinalURL:      server.URL,
+		Filename:      "resumable.bin",
+		ContentLength: int64(len(testData)),
+		ETag:          "\"test-etag-123\"",
+		AcceptRanges:  true,
+		ChunkSize:     chunkSize,
+		TotalChunks:   totalChunks,
+		CompletedSize: chunkSize,
+		Chunks:        chunks,
+	}
+	if err := cp.Save(stateFile); err != nil {
+		t.Fatalf("saving checkpoint: %v", err)
+	}
+
+	// Phase 2: Resume download with DownloadToFileWithResume
+	eng := New(
+		WithAllowPrivateHosts(true),
+		WithConcurrency(4),
+		WithChunkSize(chunkSize),
+	)
+
+	_, err = eng.DownloadToFileWithResume(context.Background(), server.URL, destFile, stateFile)
+	if err != nil {
+		t.Fatalf("resuming download failed: %v", err)
+	}
+
+	// Checkpoint file should have been cleaned up on success
+	if _, err := os.Stat(stateFile); !os.IsNotExist(err) {
+		t.Errorf("expected state file to be removed after successful resume")
+	}
+
+	// Verify complete content matches byte-for-byte
+	resultData, err := os.ReadFile(destFile)
+	if err != nil {
+		t.Fatalf("reading resumed file: %v", err)
+	}
+	if !bytes.Equal(resultData, testData) {
+		t.Fatalf("resumed file content does not match original data")
+	}
+
+	// Only remaining 3 chunks should have been requested (chunk 0 was skipped!)
+	if requests := chunkRequests.Load(); requests != 3 {
+		t.Errorf("expected exactly 3 chunk requests during resume, got %d", requests)
+	}
+}
+
+func TestOptionsReturnsIndependentCopy(t *testing.T) {
+	eng := New(WithHeader("X-Test", "original"), WithAllowPrivateHosts(true))
+	opts := eng.Options()
+	opts.Concurrency = 1
+	opts.Headers["X-Test"] = "changed"
+
+	current := eng.Options()
+	if current.Concurrency == 1 || current.Headers["X-Test"] != "original" {
+		t.Fatalf("mutating Options result changed engine options: %+v", current)
+	}
+}
+
+func TestRejectsInvalidAndPrivateURLs(t *testing.T) {
+	eng := New()
+	if _, err := eng.Probe(context.Background(), "file:///tmp/archive.zip"); !errors.Is(err, ErrInvalidURL) {
+		t.Fatalf("Probe(file URL) error = %v; want ErrInvalidURL", err)
+	}
+	if _, err := eng.Probe(context.Background(), "http://127.0.0.1/private"); !errors.Is(err, ErrPrivateNetworkAccess) {
+		t.Fatalf("Probe(loopback URL) error = %v; want ErrPrivateNetworkAccess", err)
+	}
+}
+
+func TestRejectsInvalidContentRange(t *testing.T) {
+	data := make([]byte, 256)
+	for i := range data {
+		data[i] = byte(i)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Accept-Ranges", "bytes")
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		var start, end int64
+		_, _ = fmt.Sscanf(r.Header.Get("Range"), "bytes=%d-%d", &start, &end)
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start+50, end+50, len(data)))
+		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write(data)
+	}))
+	defer server.Close()
+
+	eng := New(WithAllowPrivateHosts(true), WithConcurrency(2), WithChunkSize(128), WithMaxRetries(0))
+	_, err := eng.DownloadToFile(context.Background(), server.URL+"/file.bin", filepath.Join(t.TempDir(), "file.bin"))
+	if !errors.Is(err, ErrInvalidRange) {
+		t.Fatalf("DownloadToFile() error = %v; want ErrInvalidRange", err)
+	}
+}
+
+func TestChunkRetryResumesAtExactByteOffset(t *testing.T) {
+	data := []byte("0123456789")
+	var rangesMu sync.Mutex
+	var ranges []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rangeHeader := r.Header.Get("Range")
+		rangesMu.Lock()
+		ranges = append(ranges, rangeHeader)
+		rangesMu.Unlock()
+		var start, end int64
+		_, _ = fmt.Sscanf(rangeHeader, "bytes=%d-%d", &start, &end)
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(data)))
+		w.WriteHeader(http.StatusPartialContent)
+		if len(ranges) == 1 {
+			_, _ = w.Write(data[start : start+4])
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+			if hijacker, ok := w.(http.Hijacker); ok {
+				connection, _, _ := hijacker.Hijack()
+				_ = connection.Close()
+			}
+			return
+		}
+		_, _ = w.Write(data[start : end+1])
+	}))
+	defer server.Close()
+
+	destination := filepath.Join(t.TempDir(), "resume.bin")
+	file, err := os.Create(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if err := file.Truncate(int64(len(data))); err != nil {
+		t.Fatal(err)
+	}
+	chunk := &Chunk{Start: 0, End: int64(len(data) - 1)}
+	factory := func() (io.Writer, error) {
+		return io.NewOffsetWriter(file, chunk.GetDownloaded()), nil
+	}
+	opts := DefaultOptions()
+	opts.AllowPrivateHosts = true
+	opts.MaxRetries = 1
+	opts.RetryDelay = time.Millisecond
+	if err := downloadChunk(context.Background(), server.URL, chunk, factory, opts, nil); err != nil {
+		t.Fatalf("downloadChunk() error = %v", err)
+	}
+	got, err := os.ReadFile(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatalf("downloaded data = %q; want %q", got, data)
+	}
+	rangesMu.Lock()
+	defer rangesMu.Unlock()
+	if len(ranges) != 2 || ranges[0] != "bytes=0-9" || ranges[1] != "bytes=4-9" {
+		t.Fatalf("request ranges = %v; want [bytes=0-9 bytes=4-9]", ranges)
+	}
+}
+
+func TestFinalProgressReportsDownloadError(t *testing.T) {
+	payload := []byte("complete payload that will be interrupted")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+		w.WriteHeader(http.StatusOK)
+		if r.Method == http.MethodGet {
+			_, _ = w.Write(payload[:5])
+			if hijacker, ok := w.(http.Hijacker); ok {
+				connection, _, _ := hijacker.Hijack()
+				_ = connection.Close()
+			}
+		}
+	}))
+	defer server.Close()
+
+	snapshots := make(chan ProgressSnapshot, 1)
+	eng := New(WithAllowPrivateHosts(true), WithConcurrency(1), WithMaxRetries(0), WithProgressCallback(func(snapshot ProgressSnapshot) {
+		select {
+		case snapshots <- snapshot:
+		default:
+		}
+	}, time.Millisecond))
+	_, err := eng.DownloadToFile(context.Background(), server.URL+"/file", filepath.Join(t.TempDir(), "file"))
+	if err == nil {
+		t.Fatal("DownloadToFile() unexpectedly succeeded")
+	}
+	select {
+	case snapshot := <-snapshots:
+		if !snapshot.Done || snapshot.Err == nil {
+			t.Fatalf("final snapshot = %+v; want Done with non-nil error", snapshot)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for final progress snapshot")
+	}
+}
+
+func TestAutoRenamePreservesExistingFile(t *testing.T) {
+	payload := []byte("new payload")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	destination := filepath.Join(t.TempDir(), "download.bin")
+	if err := os.WriteFile(destination, []byte("old payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	eng := New(WithAllowPrivateHosts(true), WithConcurrency(1))
+	if _, err := eng.DownloadToFile(context.Background(), server.URL+"/download.bin", destination); err != nil {
+		t.Fatalf("DownloadToFile() error = %v", err)
+	}
+	original, err := os.ReadFile(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renamed, err := os.ReadFile(filepath.Join(filepath.Dir(destination), "download (1).bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(original, []byte("old payload")) || !bytes.Equal(renamed, payload) {
+		t.Fatalf("files = %q, %q; want preserved original and renamed download", original, renamed)
+	}
+}
+
+func TestDownloadToFDTruncatesAndSeeksStart(t *testing.T) {
+	payload := []byte("new")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	destination := filepath.Join(t.TempDir(), "fd.bin")
+	file, err := os.OpenFile(destination, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.SetFinalizer(file, nil)
+	if _, err := file.WriteString("stale data with trailing bytes"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Seek(7, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	eng := New(WithAllowPrivateHosts(true), WithConcurrency(1))
+	if _, err := eng.DownloadToFD(context.Background(), server.URL+"/file", int(file.Fd()), ""); err != nil {
+		t.Fatalf("DownloadToFD() error = %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("FD destination = %q; want %q", got, payload)
+	}
+}

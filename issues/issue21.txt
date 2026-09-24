@@ -1,0 +1,26 @@
+Issue #21: MediaSniffer fabricates quality options and mislabels HLS/media streams
+Severity: Medium
+Component: Android (browser)
+Location: android/app/src/main/java/com/downloadengine/app/browser/MediaSniffer.java:29-54, android/app/src/main/java/com/downloadengine/app/browser/MediaSniffer.java:81-106, android/app/src/main/res/layout/dialog_sniffed_media.xml
+
+Evidence:
+  SniffedMediaItem always invents resolution choices that the server never
+  advertised:
+
+      availableQualities.add("1080p Full HD (" + format + ")");
+      availableQualities.add("720p HD (" + format + ")");
+      availableQualities.add("480p SD (" + format + ")");
+      availableQualities.add("Audio Stream (MP3)");
+
+  All of these resolve to the SAME detected URL (the dialog's selected
+  quality is not used to build a different request). Also, inspectUrl
+  detects `.m3u8` as media but the item is constructed with a hardcoded
+  mimeType "video/mp4" (line 99), and detectFormat would return "FILE" for an
+  .m3u8 URL (no branch matches).
+
+Impact:
+  The UI promises per-resolution downloads and an MP3 audio extraction that
+  do not exist; picking any quality downloads the identical file. HLS
+  (`.m3u8`) playlists are mislabeled as MP4 and handed to the engine as a
+  playlist text file, not the video. This is misleading and produces broken
+  downloads.

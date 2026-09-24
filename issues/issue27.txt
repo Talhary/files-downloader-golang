@@ -1,0 +1,24 @@
+Issue #27: build.ps1 hardcodes absolute local paths; prebuilt binaries/artifacts are committed
+Severity: Medium
+Component: Android build / repo
+Location: android/build.ps1:13-22, android/build.ps1:29-33
+
+Evidence:
+      $SdkRoot = "C:\android"
+      $PlatformJar = "$SdkRoot\platforms\android-34\android.jar"
+      $BuildTools = "$SdkRoot\build-tools\34.0.0"
+      $JdkBin = "C:\Program Files\Microsoft\jdk-17.0.18.8-hotspot\bin"
+
+  The build cannot run anywhere except a machine that has exactly this
+  layout (and that specific patch version of the Microsoft JDK). It also has
+  no checksum/version pinning for aapt2/d8/zipalign/apksigner.
+
+  On top of that, generated output is committed: android/build/classes/*.class,
+  android/build/dex/classes.dex, android/build/*.apk, android/app-base.apk,
+  android/bin/DL_Engine_Pro-release.apk(+.idsig), android/compiled_res.zip,
+  and the root dlengine.exe.
+
+Impact:
+  Non-reproducible, non-portable builds; large binary artifacts bloat the
+  repo and can drift from source. The committed .class/.dex files make it
+  unclear whether the shipped APK matches the checked-in Java.

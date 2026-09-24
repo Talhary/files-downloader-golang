@@ -10,6 +10,7 @@ import dataclasses
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 import threading
@@ -27,7 +28,7 @@ class ProbeResult:
     status_code: int
     final_url: str
     total_chunks: int
-    version: str = "1.1.0"
+    version: str = __version__
 
     @property
     def total_mb(self) -> float:
@@ -114,37 +115,45 @@ class DLEngine:
     @staticmethod
     def _auto_detect_binary() -> Path:
         base_dir = Path(__file__).resolve().parent.parent
-        is_windows = platform.system() == "Windows"
+        system = platform.system()
         arch = platform.machine().lower()
+        is_arm = "arm" in arch or "aarch64" in arch
 
-        if is_windows:
+        if system == "Windows":
             candidates = [
                 base_dir / "dlengine.exe",
                 base_dir / "bin" / "dlengine-windows-amd64.exe",
                 base_dir / "bin" / "dlengine.exe",
             ]
+            fallback = Path("dlengine.exe")
+        elif system == "Darwin":
+            binary_name = "dlengine-darwin-arm64" if is_arm else "dlengine-darwin-amd64"
+            candidates = [
+                base_dir / "bin" / binary_name,
+                base_dir / "dlengine",
+                base_dir / "bin" / "dlengine",
+            ]
+            fallback = Path("./bin") / binary_name
+        elif is_arm:
+            candidates = [
+                base_dir / "bin" / "dlengine-linux-arm64",
+                base_dir / "dlengine",
+                base_dir / "bin" / "dlengine",
+            ]
+            fallback = Path("./bin/dlengine-linux-arm64")
         else:
-            if "arm" in arch or "aarch64" in arch:
-                candidates = [
-                    base_dir / "bin" / "dlengine-linux-arm64",
-                    base_dir / "dlengine",
-                    base_dir / "bin" / "dlengine",
-                ]
-            else:
-                candidates = [
-                    base_dir / "bin" / "dlengine-linux-amd64",
-                    base_dir / "dlengine",
-                    base_dir / "bin" / "dlengine",
-                ]
+            candidates = [
+                base_dir / "bin" / "dlengine-linux-amd64",
+                base_dir / "dlengine",
+                base_dir / "bin" / "dlengine",
+            ]
+            fallback = Path("./bin/dlengine-linux-amd64")
 
         for p in candidates:
             if p.exists():
                 return p
 
-        # Fallback to current working directory
-        if is_windows:
-            return Path("dlengine.exe")
-        return Path("./bin/dlengine-linux-amd64")
+        return fallback
 
     def _format_timeout(self, timeout: Optional[Union[float, int, str]]) -> Optional[str]:
         if timeout is None:
@@ -152,6 +161,41 @@ class DLEngine:
         if isinstance(timeout, (int, float)):
             return f"{int(timeout)}s"
         return str(timeout)
+
+    @staticmethod
+    def _timeout_seconds(timeout: Optional[Union[float, int, str]]) -> Optional[float]:
+        if timeout is None:
+            return None
+        if isinstance(timeout, (int, float)):
+            return float(timeout)
+
+        value = str(timeout).strip()
+        if value == "0":
+            return 0.0
+
+        units = {
+            "ns": 1e-9,
+            "us": 1e-6,
+            "µs": 1e-6,
+            "μs": 1e-6,
+            "ms": 1e-3,
+            "s": 1.0,
+            "m": 60.0,
+            "h": 3600.0,
+        }
+        pattern = re.compile(
+            r"(?P<value>(?:\d+(?:\.\d*)?|\.\d+))(?P<unit>ns|us|µs|μs|ms|s|m|h)"
+        )
+        position = 0
+        seconds = 0.0
+        for match in pattern.finditer(value):
+            if match.start() != position:
+                return None
+            seconds += float(match.group("value")) * units[match.group("unit")]
+            position = match.end()
+        if position != len(value):
+            return None
+        return seconds
 
     def probe(
         self,
@@ -196,7 +240,7 @@ class DLEngine:
                         status_code=data.get("status_code", 0),
                         final_url=data.get("final_url", ""),
                         total_chunks=data.get("total_chunks", 1),
-                        version=data.get("version", "1.1.0"),
+                        version=data.get("version", __version__),
                     )
                 elif data.get("event") == "error":
                     raise DownloadEngineError(data.get("message", "Unknown probe error"))
@@ -261,6 +305,29 @@ class DLEngine:
 
         result: Optional[DownloadResult] = None
         last_error: Optional[str] = None
+        stderr_output = []
+        timeout_seconds = self._timeout_seconds(timeout)
+        timed_out = threading.Event()
+
+        def read_stderr():
+            for line in process.stderr:
+                stderr_output.append(line)
+
+        stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+        stderr_thread.start()
+        timer: Optional[threading.Timer] = None
+
+        def kill_on_timeout():
+            timed_out.set()
+            try:
+                process.kill()
+            except OSError:
+                pass
+
+        if timeout_seconds is not None:
+            timer = threading.Timer(timeout_seconds, kill_on_timeout)
+            timer.daemon = True
+            timer.start()
 
         try:
             for line in process.stdout:
@@ -302,12 +369,21 @@ class DLEngine:
                 except json.JSONDecodeError:
                     continue
 
-            wait_timeout = float(timeout) if isinstance(timeout, (int, float)) else None
-            process.wait(timeout=wait_timeout)
+            try:
+                process.wait(timeout=timeout_seconds)
+            except subprocess.TimeoutExpired as exc:
+                kill_on_timeout()
+                process.wait()
+                raise DownloadEngineError(f"Download timed out after {self._format_timeout(timeout)}") from exc
+            finally:
+                stderr_thread.join()
+
+            if timed_out.is_set():
+                raise DownloadEngineError(f"Download timed out after {self._format_timeout(timeout)}")
             if process.returncode != 0:
-                stderr_output = process.stderr.read()
+                stderr_text = "".join(stderr_output).strip()
                 raise DownloadEngineError(
-                    last_error or f"Process exited with code {process.returncode}: {stderr_output}"
+                    last_error or f"Process exited with code {process.returncode}: {stderr_text}"
                 )
 
             if result is None:
@@ -316,8 +392,13 @@ class DLEngine:
             return result
 
         except Exception:
-            process.kill()
+            if process.poll() is None:
+                process.kill()
+                process.wait()
             raise
+        finally:
+            if timer is not None:
+                timer.cancel()
 
     async def download_async(
         self,
@@ -533,8 +614,11 @@ class DLEngine:
                 err = " ".join(error_msg) if error_msg else f"Process exited with code {process.returncode}"
                 raise DownloadEngineError(f"Stream error: {err}")
 
-        except Exception:
-            process.kill()
+        except BaseException:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+            t.join(timeout=1.0)
             raise
 
     async def stream_async(
@@ -635,6 +719,9 @@ class DLEngine:
                 err = " ".join(error_msg) if error_msg else f"Process exited with code {proc.returncode}"
                 raise DownloadEngineError(f"Stream error: {err}")
 
-        except Exception:
-            proc.kill()
+        except BaseException:
+            if proc.returncode is None:
+                proc.kill()
+                await proc.wait()
+            await stderr_task
             raise

@@ -1,0 +1,24 @@
+Issue #11: macOS binary auto-detection is missing although releases ship darwin binaries
+Severity: Medium
+Component: Python SDK (python/dlengine.py)
+Location: python/dlengine.py:114-147, .github/workflows/release.yml:46-48
+
+Evidence:
+  _auto_detect_binary branches on `platform.system() == "Windows"` and
+  otherwise assumes Linux:
+
+      if is_windows:
+          candidates = [ ...windows... ]
+      else:
+          if "arm" in arch or "aarch64" in arch:
+              candidates = [base_dir/"bin"/"dlengine-linux-arm64", ...]
+
+  On macOS (platform.system() == "Darwin") it will look for
+  `bin/dlengine-linux-amd64` or `bin/dlengine-linux-arm64`, neither of which
+  is produced for macOS. The release workflow, however, builds
+  dist/dlengine-darwin-amd64 and dist/dlengine-darwin-arm64.
+
+Impact:
+  DLEngine() raises FileNotFoundError on macOS out of the box, and the
+  documented "Compatible with ... macOS" claim plus the darwin release
+  artifacts are unusable through the SDK without manually passing bin_path.

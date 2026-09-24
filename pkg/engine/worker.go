@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -91,7 +93,12 @@ func attemptDownloadChunk(
 	}
 
 	applyHeaders(req, opts)
-	req.Header.Set("Range", chunk.RangeHeader())
+	requestStart := chunk.Start + chunk.GetDownloaded()
+	if requestStart < chunk.Start || requestStart > chunk.End {
+		return fmt.Errorf("%w: chunk %d has invalid downloaded byte count %d", ErrInvalidRange, chunk.Index, chunk.GetDownloaded())
+	}
+	expectedBytes := chunk.End - requestStart + 1
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", requestStart, chunk.End))
 
 	resp, err := opts.HTTPClient.Do(req)
 	if err != nil {
@@ -114,8 +121,17 @@ func attemptDownloadChunk(
 	}
 
 	// If server ignored Range on a chunk past the first one, fail fast
-	if resp.StatusCode == http.StatusOK && chunk.Start > 0 {
+	if resp.StatusCode == http.StatusOK && requestStart > 0 {
 		return fmt.Errorf("%w: server ignored Range header and returned full content (status 200 OK)", ErrRangeNotSupported)
+	}
+	if resp.StatusCode == http.StatusPartialContent {
+		contentStart, contentEnd, total, ok := parseContentRange(resp.Header.Get("Content-Range"))
+		if !ok || contentStart != requestStart || contentEnd != chunk.End {
+			return fmt.Errorf("%w: chunk %d requested bytes %d-%d but server returned Content-Range %q", ErrInvalidRange, chunk.Index, requestStart, chunk.End, resp.Header.Get("Content-Range"))
+		}
+		if total > 0 && total < chunk.End+1 {
+			return fmt.Errorf("%w: chunk %d range exceeds resource length %d", ErrInvalidRange, chunk.Index, total)
+		}
 	}
 
 	var bodyReader io.ReadCloser = resp.Body
@@ -132,7 +148,6 @@ func attemptDownloadChunk(
 	}
 	buf := make([]byte, bufSize)
 
-	expectedBytes := chunk.Size()
 	var totalRead int64
 
 	for {
@@ -153,6 +168,7 @@ func attemptDownloadChunk(
 			}
 
 			totalRead += int64(n)
+			chunk.SetDownloaded(totalRead + requestStart - chunk.Start)
 			if attemptBytes != nil {
 				*attemptBytes += int64(n)
 			}
@@ -162,7 +178,7 @@ func attemptDownloadChunk(
 		}
 
 		if rErr != nil {
-			if rErr == io.EOF {
+			if rErr == io.EOF || totalRead == expectedBytes {
 				break
 			}
 			return fmt.Errorf("reading chunk body: %w", rErr)
@@ -170,11 +186,33 @@ func attemptDownloadChunk(
 	}
 
 	// Verify byte length matches chunk size if range was accepted
-	if resp.StatusCode == http.StatusPartialContent && totalRead != expectedBytes {
+	if totalRead != expectedBytes {
 		return fmt.Errorf("chunk %d size mismatch: expected %d bytes, received %d bytes", chunk.Index, expectedBytes, totalRead)
 	}
 
 	return nil
+}
+
+func parseContentRange(value string) (int64, int64, int64, bool) {
+	parts := strings.Fields(value)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "bytes") {
+		return 0, 0, 0, false
+	}
+	rangeParts := strings.SplitN(parts[1], "/", 2)
+	if len(rangeParts) != 2 {
+		return 0, 0, 0, false
+	}
+	bounds := strings.SplitN(rangeParts[0], "-", 2)
+	if len(bounds) != 2 {
+		return 0, 0, 0, false
+	}
+	start, startErr := strconv.ParseInt(bounds[0], 10, 64)
+	end, endErr := strconv.ParseInt(bounds[1], 10, 64)
+	total, totalErr := strconv.ParseInt(rangeParts[1], 10, 64)
+	if startErr != nil || endErr != nil || totalErr != nil || start < 0 || end < start {
+		return 0, 0, 0, false
+	}
+	return start, end, total, true
 }
 
 // idleTimeoutReader interrupts stalled reads if no data is received within the specified timeout.

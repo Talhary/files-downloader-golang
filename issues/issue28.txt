@@ -1,0 +1,20 @@
+Issue #28: .gitignore does not exclude signing material or build outputs
+Severity: Medium
+Component: repo hygiene / security
+Location: .gitignore:1-26
+
+Evidence:
+  .gitignore covers *.exe/*.so/*.dll/*.bin, some download artifacts, and
+  Python caches. It does NOT list:
+      *.keystore, *.jks           (android/release.keystore is on disk)
+      *.apk, *.apks, *.idsig      (android/bin/DL_Engine_Pro-release.apk)
+      android/build/, android/bin/
+      android/compiled_res.zip
+      /bin/  (prebuilt linux binaries)
+      *.class, *.dex
+      logs/
+
+Impact:
+  Secrets (signing key) and large/uncontrolled build outputs can be, and in
+  this working tree already are, picked up by `git add .`. Combined with
+  issue #14 (known password) this makes key leakage one `git add .` away.

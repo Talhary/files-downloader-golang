@@ -1,0 +1,31 @@
+Issue #18: NativeBridge.probe() does not catch UnsatisfiedLinkError; isLoaded() is never used
+Severity: High
+Component: Android (engine)
+Location: android/app/src/main/java/com/downloadengine/app/engine/NativeBridge.java:9-17, android/app/src/main/java/com/downloadengine/app/engine/NativeBridge.java:41-62
+
+Evidence:
+  The static initializer catches UnsatisfiedLinkError and records
+  sLibraryLoaded=false, exposing isLoaded(). But probe() calls the native
+  method directly:
+
+      public static ProbeResult probe(String url) {
+          ProbeResult res = new ProbeResult();
+          try {
+              String jsonStr = nativeProbe(url, "{}");   // throws UnsatisfiedLinkError if .so missing
+              ...
+          } catch (Exception e) {   // Error is NOT an Exception
+              res.error = e.getMessage();
+          }
+          return res;
+      }
+
+  UnsatisfiedLinkError extends Error, so it is not caught. Callers are:
+  MainActivity.probeTask (line 474) on a background thread, and
+  DownloadQueueManager.enqueue (line 112) on the executor, and startTask
+  (NativeBridge.nativeStartDownload*, line 237-258) with no try/catch.
+
+Impact:
+  On a device/ABI where libdlengine.so failed to load (e.g. an ABI not built
+  by build.ps1, or a stripped library), tapping download crashes the app
+  instead of the intended graceful fallback. isLoaded() exists but is dead
+  code - never checked.

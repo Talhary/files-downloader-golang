@@ -1,0 +1,19 @@
+Issue #6: AutoRename option is declared but unused; existing files are silently overwritten
+Severity: Medium
+Component: Go engine (pkg/engine)
+Location: pkg/engine/options.go:66, pkg/engine/file_sink.go:56, pkg/engine/fd_sink.go:95
+
+Evidence:
+  Options.AutoRename is defined and defaulted to true (options.go:90) but is
+  never read anywhere. Target files are always opened with O_TRUNC:
+
+      os.OpenFile(destPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o644)
+
+  and SafeResume opens with O_CREATE|O_RDWR (no truncate) when resuming. When
+  `-o` is omitted the extracted filename is used directly, so downloading the
+  same URL twice overwrites the previous file without warning.
+
+Impact:
+  User data loss (silent overwrite) and a public option that has no effect,
+  which is misleading. There is no "file exists -> add (1)" behavior despite
+  AutoRename=true.

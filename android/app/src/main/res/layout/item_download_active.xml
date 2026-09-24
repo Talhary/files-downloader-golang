@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@drawable/bg_card"
+    android:padding="16dp"
+    android:layout_marginBottom="12dp">
+
+    <!-- Top Row: File Name & Category Badge -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:id="@+id/tvActiveFilename"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="filename.ext"
+            android:textColor="@color/text_white"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            android:ellipsize="middle"
+            android:singleLine="true" />
+
+        <TextView
+            android:id="@+id/tvActiveCategoryBadge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="VIDEO"
+            android:textColor="@color/primary_cyan"
+            android:textSize="10sp"
+            android:textStyle="bold"
+            android:background="@drawable/bg_button_dark"
+            android:paddingStart="6dp"
+            android:paddingEnd="6dp"
+            android:paddingTop="2dp"
+            android:paddingBottom="2dp"
+            android:layout_marginStart="8dp" />
+    </LinearLayout>
+
+    <!-- Progress Bar -->
+    <ProgressBar
+        android:id="@+id/pbActiveProgress"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="8dp"
+        android:layout_marginTop="12dp"
+        android:layout_marginBottom="8dp"
+        android:max="1000"
+        android:progress="350"
+        android:progressDrawable="@drawable/progress_horizontal_cyan" />
+
+    <!-- Progress Numbers: Downloaded / Total & Percentage -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/tvActiveBytes"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="350 MB / 1.0 GB"
+            android:textColor="@color/text_secondary"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/tvActivePercent"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="35.0%"
+            android:textColor="@color/primary_cyan"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- Speed, ETA, Worker Count & Actions -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginTop="8dp">
+
+        <TextView
+            android:id="@+id/tvActiveSpeedEta"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="⚡ 14.5 MB/s • ETA: 45s • 16w"
+            android:textColor="@color/text_muted"
+            android:textSize="11sp" />
+
+        <!-- Pause / Resume Button -->
+        <Button
+            android:id="@+id/btnActivePauseResume"
+            android:layout_width="72dp"
+            android:layout_height="32dp"
+            android:text="Pause"
+            android:textColor="@color/bg_dark"
+            android:textSize="11sp"
+            android:textStyle="bold"
+            android:background="@drawable/bg_button_cyan"
+            android:layout_marginEnd="6dp" />
+
+        <!-- Cancel Button -->
+        <Button
+            android:id="@+id/btnActiveCancel"
+            android:layout_width="64dp"
+            android:layout_height="32dp"
+            android:text="Cancel"
+            android:textColor="@color/text_white"
+            android:textSize="11sp"
+            android:background="@drawable/bg_button_dark" />
+
+    </LinearLayout>
+
+</LinearLayout>

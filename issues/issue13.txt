@@ -1,0 +1,30 @@
+Issue #13: startService() used instead of startForegroundService() - crash on Android 8+ background starts
+Severity: High
+Component: Android (service)
+Location: android/app/src/main/java/com/downloadengine/app/service/DownloadQueueManager.java:231-233, android/app/src/main/java/com/downloadengine/app/service/ScheduleReceiver.java:24-26
+
+Evidence:
+      // DownloadQueueManager.startTask()
+      Intent intent = new Intent(mContext, DownloadService.class);
+      intent.setAction(DownloadService.ACTION_UPDATE_NOTIFICATION);
+      mContext.startService(intent);
+
+  DownloadService promotes itself with startForeground() in
+  updateForegroundNotification(). Since Android 8.0 (API 26), a
+  background-started service that calls startForeground must be started via
+  Context.startForegroundService(); using startService() from the background
+  throws:
+
+      IllegalStateException: Not allowed to start service Intent { ... }:
+      app is in background
+
+  ScheduleReceiver.onReceive() (line 24-26) does the same startService() call
+  from a broadcast receiver.
+
+Impact:
+  - Tapping [Pause]/[Cancel] on the notification (which delivers an Intent to
+    the service via startService in the PendingIntent) and pumpQueue() when
+    the app is backgrounded can crash the app.
+  - The app declares FOREGROUND_SERVICE and FOREGROUND_SERVICE_DATA_SYNC in
+    the manifest, so the intent is clearly to run as a foreground service;
+    the start path contradicts it.

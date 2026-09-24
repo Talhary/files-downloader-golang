@@ -1,0 +1,59 @@
+name: Quality Checks
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Test Go
+        run: go test -race ./...
+
+      - name: Vet Go
+        run: go vet ./...
+
+      - name: Test Python SDK
+        run: python -m unittest discover -s python -p 'test_*.py'
+
+      - name: Check Version Identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^const Version = "\([^"]*\)"/\1/p' pkg/engine/options.go)"
+          grep -Fq "__version__ = \"$version\"" python/dlengine.py
+          grep -Fq "android:versionName=\"$version\"" android/app/src/main/AndroidManifest.xml
+          grep -Fq "Go Multi-Part Engine v$version" android/app/src/main/res/layout/view_settings.xml
+          grep -Fq "https://github.com/Talhary/files-downloader-golang" pkg/engine/options.go
+          grep -Fq "https://github.com/Talhary/files-downloader-golang" docs/PYTHON_GUIDE.md
+
+      - name: Reject Tracked Build Artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          tracked="$(git ls-files | grep -E '^(bin/|dist/|android/(build|bin|gen)/|.*\.(apk|apks|aab|idsig|class|dex|keystore|jks)$)' || true)"
+          if [ -n "$tracked" ]; then
+            printf 'Tracked build or signing artifacts found:\n%s\n' "$tracked" >&2
+            exit 1
+          fi

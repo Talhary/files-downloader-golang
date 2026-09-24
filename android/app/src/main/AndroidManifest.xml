@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.downloadengine.app"
+    android:versionCode="110"
+    android:versionName="1.1.0">
+
+    <uses-sdk
+        android:minSdkVersion="24"
+        android:targetSdkVersion="34" />
+
+    <!-- Core Network & Background Permissions -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Storage Permissions (Legacy + Scoped) -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@drawable/ic_launcher"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.DownloadEngine"
+        android:usesCleartextTraffic="false">
+
+        <!-- Main Application Activity -->
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:exported="true"
+            android:windowSoftInputMode="adjustResize">
+            
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- Intercept links shared from other apps / external browsers -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="http" />
+                <data android:scheme="https" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
+
+        <!-- Foreground Download Service (Android 14 dataSync type) -->
+        <service
+            android:name=".service.DownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- Scheduled Downloads Broadcast Receiver -->
+        <receiver
+            android:name=".service.ScheduleReceiver"
+            android:exported="false" />
+
+        <!-- Standalone Secure FileProvider for Opening Downloaded Files -->
+        <provider
+            android:name=".storage.DownloadFileProvider"
+            android:authorities="com.downloadengine.app.provider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+    </application>
+
+</manifest>

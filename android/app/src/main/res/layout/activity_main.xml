@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/bg_dark">
+
+    <!-- Top App Bar Header -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:background="@color/surface_card">
+
+        <TextView
+            android:id="@+id/tvAppTitle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/app_name"
+            android:textColor="@color/text_white"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvGlobalSpeed"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="0.0 MB/s"
+            android:textColor="@color/primary_cyan"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp"
+            android:background="@drawable/bg_button_dark" />
+    </LinearLayout>
+
+    <!-- Content Switcher Container -->
+    <FrameLayout
+        android:id="@+id/contentContainer"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <include
+            android:id="@+id/viewDownloads"
+            layout="@layout/view_downloads"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <include
+            android:id="@+id/viewBrowser"
+            layout="@layout/view_browser"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone" />
+
+        <include
+            android:id="@+id/viewFiles"
+            layout="@layout/view_files"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone" />
+
+        <include
+            android:id="@+id/viewSettings"
+            layout="@layout/view_settings"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone" />
+
+    </FrameLayout>
+
+    <!-- Bottom Navigation Bar -->
+    <LinearLayout
+        android:id="@+id/bottomNav"
+        android:layout_width="match_parent"
+        android:layout_height="64dp"
+        android:orientation="horizontal"
+        android:background="@color/bottom_nav_bg">
+
+        <LinearLayout
+            android:id="@+id/navTabDownloads"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:clickable="true"
+            android:focusable="true">
+
+            <TextView
+                android:id="@+id/tvNavDownloads"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/tab_downloads"
+                android:textColor="@color/primary_cyan"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/navTabBrowser"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:clickable="true"
+            android:focusable="true">
+
+            <TextView
+                android:id="@+id/tvNavBrowser"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/tab_browser"
+                android:textColor="@color/text_muted"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/navTabFiles"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:clickable="true"
+            android:focusable="true">
+
+            <TextView
+                android:id="@+id/tvNavFiles"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/tab_files"
+                android:textColor="@color/text_muted"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/navTabSettings"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:clickable="true"
+            android:focusable="true">
+
+            <TextView
+                android:id="@+id/tvNavSettings"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/tab_settings"
+                android:textColor="@color/text_muted"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+    </LinearLayout>
+
+</LinearLayout>

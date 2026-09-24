@@ -1,0 +1,24 @@
+Issue #8: Windows reserved device names are not sanitized in extracted filenames
+Severity: Medium
+Component: Go engine (pkg/engine)
+Location: pkg/engine/probe.go:277-298
+
+Evidence:
+  sanitizeFilename strips path separators, control characters and the
+  `<>:"/\|?*` set, and trims trailing dots/spaces. It does not handle the
+  Windows reserved device names:
+
+      CON, PRN, AUX, NUL, COM1..COM9, LPT1..LPT9
+
+  A remote URL or Content-Disposition such as `NUL.rar` (or `CON`, `AUX.txt`)
+  passes sanitization unchanged. On Windows, creating/opening such a file
+  targets the device instead of a regular file.
+
+Impact:
+  - On Windows, os.OpenFile("NUL") succeeds and silently discards all
+    writes; the download "completes" but produces no file.
+  - `CON`/`PRN` etc. can block or error. This is a robustness bug specific to
+    the Windows target the project explicitly supports.
+  - Also note `sanitizeFilename` is applied to the *URL-derived* name before
+    `filepath.Join(destDir, name)`, so a name like `..` (already handled) is
+    the only traversal defense; reserved names are missed.

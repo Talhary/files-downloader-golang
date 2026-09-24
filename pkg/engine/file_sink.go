@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -25,7 +26,7 @@ func (e *Engine) DownloadToFile(ctx context.Context, rawURL string, destPath str
 	}
 
 	// Resolve destination file path
-	resolvedDest, err := e.resolveDestPath(destPath, info)
+	resolvedDest, err := e.resolveDestPath(destPath, info, false)
 	if err != nil {
 		return nil, err
 	}
@@ -37,7 +38,7 @@ func (e *Engine) DownloadToFile(ctx context.Context, rawURL string, destPath str
 		}
 	}
 
-	if !info.AcceptRanges || info.ContentLength <= 0 || e.opts.Concurrency <= 1 {
+	if !info.AcceptRanges || info.ContentLength <= 0 {
 		// Single-stream fallback
 		err = e.downloadSingleStreamToFile(ctx, info.FinalURL, resolvedDest, info)
 	} else {
@@ -52,7 +53,7 @@ func (e *Engine) DownloadToFile(ctx context.Context, rawURL string, destPath str
 	return info, nil
 }
 
-func (e *Engine) downloadMultipartToFile(ctx context.Context, targetURL string, destPath string, info *FileInfo) error {
+func (e *Engine) downloadMultipartToFile(ctx context.Context, targetURL string, destPath string, info *FileInfo) (resultErr error) {
 	file, err := os.OpenFile(destPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o644)
 	if err != nil {
 		return fmt.Errorf("creating target file: %w", err)
@@ -70,7 +71,7 @@ func (e *Engine) downloadMultipartToFile(ctx context.Context, targetURL string, 
 	chunks := CalculateChunks(info.ContentLength, e.opts.ChunkSize, e.opts.Concurrency)
 	tracker := NewProgressTracker(info.ContentLength, len(chunks), e.opts.ProgressFunc, e.opts.ProgressInterval)
 	defer func() {
-		tracker.Stop(err)
+		tracker.Stop(resultErr)
 	}()
 
 	workerCtx, cancel := context.WithCancel(ctx)
@@ -110,7 +111,7 @@ func (e *Engine) downloadMultipartToFile(ctx context.Context, targetURL string, 
 
 				// Factory returns a new OffsetWriter at chunk.Start for each attempt to avoid offset corruption on retry
 				destFactory := func() (io.Writer, error) {
-					return io.NewOffsetWriter(file, chunk.Start), nil
+					return io.NewOffsetWriter(file, chunk.Start+chunk.GetDownloaded()), nil
 				}
 
 				if err := downloadChunk(workerCtx, targetURL, chunk, destFactory, e.opts, tracker); err != nil {
@@ -140,7 +141,7 @@ func (e *Engine) downloadMultipartToFile(ctx context.Context, targetURL string, 
 	return nil
 }
 
-func (e *Engine) downloadSingleStreamToFile(ctx context.Context, targetURL string, destPath string, info *FileInfo) error {
+func (e *Engine) downloadSingleStreamToFile(ctx context.Context, targetURL string, destPath string, info *FileInfo) (resultErr error) {
 	file, err := os.OpenFile(destPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o644)
 	if err != nil {
 		return fmt.Errorf("creating target file: %w", err)
@@ -172,7 +173,7 @@ func (e *Engine) downloadSingleStreamToFile(ctx context.Context, targetURL strin
 
 	tracker := NewProgressTracker(info.ContentLength, 1, e.opts.ProgressFunc, e.opts.ProgressInterval)
 	defer func() {
-		tracker.Stop(err)
+		tracker.Stop(resultErr)
 	}()
 
 	tracker.WorkerStarted()
@@ -210,21 +211,32 @@ func (e *Engine) downloadSingleStreamToFile(ctx context.Context, targetURL strin
 	return file.Sync()
 }
 
-
-func (e *Engine) resolveDestPath(destPath string, info *FileInfo) (string, error) {
+func (e *Engine) resolveDestPath(destPath string, info *FileInfo, preserveExisting bool) (string, error) {
+	var candidate string
 	if destPath == "" {
-		return info.Filename, nil
+		candidate = info.Filename
+	} else {
+		stat, err := os.Stat(destPath)
+		if err == nil && stat.IsDir() {
+			candidate = filepath.Join(destPath, info.Filename)
+		} else if destPath[len(destPath)-1] == os.PathSeparator || destPath[len(destPath)-1] == '/' {
+			candidate = filepath.Join(destPath, info.Filename)
+		} else {
+			candidate = destPath
+		}
 	}
 
-	stat, err := os.Stat(destPath)
-	if err == nil && stat.IsDir() {
-		return filepath.Join(destPath, info.Filename), nil
+	if !e.opts.AutoRename || preserveExisting {
+		return candidate, nil
 	}
-
-	// Check if path ends with separator indicating a directory
-	if destPath[len(destPath)-1] == os.PathSeparator || destPath[len(destPath)-1] == '/' {
-		return filepath.Join(destPath, info.Filename), nil
+	for n := 1; ; n++ {
+		if _, err := os.Stat(candidate); errors.Is(err, os.ErrNotExist) {
+			return candidate, nil
+		} else if err != nil {
+			return "", fmt.Errorf("checking destination file: %w", err)
+		}
+		extension := filepath.Ext(candidate)
+		base := candidate[:len(candidate)-len(extension)]
+		candidate = fmt.Sprintf("%s (%d)%s", base, n, extension)
 	}
-
-	return destPath, nil
 }

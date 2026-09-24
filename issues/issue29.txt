@@ -1,0 +1,21 @@
+Issue #29: Version numbers and documented repository identity are inconsistent
+Severity: Low
+Component: docs / metadata
+Location: android/app/src/main/AndroidManifest.xml:4-5, pkg/engine/options.go:11, python/dlengine.py:19, docs/PYTHON_GUIDE.md:14
+
+Evidence:
+  Engine:      const Version = "1.1.0"                (options.go:11)
+  Python:      __version__ = "1.1.0" and dataclass default "1.1.0"
+  Android:     android:versionCode="1" android:versionName="1.0.0"
+               (manifest) while build.ps1/README label the app 1.1.0
+               and fragment_settings.xml shows "Engine v1.1.0".
+  Docs:        PYTHON_GUIDE.md points at
+               https://github.com/Talhary/files-downloader-golang/releases/...
+               while the README uses a "download-engine" identity and the
+               DefaultUserAgent is "DownloadEngine/1.1 (+https://github.com/download-engine)".
+
+Impact:
+  Users cannot correlate an APK with an engine version; release notes/tags
+  are ambiguous (see issue #25); and the docs reference a different GitHub
+  repository than the artifacts/UA imply. Simple to fix, but it erodes trust
+  in release provenance.

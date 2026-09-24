@@ -1,0 +1,24 @@
+Issue #2: Engine.Options() returns the mutable internal pointer, not a copy
+Severity: Medium
+Component: Go engine (pkg/engine)
+Location: pkg/engine/downloader.go:22-25
+
+Evidence:
+      // Options returns a copy of current engine options.
+      func (e *Engine) Options() *Options {
+          return e.opts
+      }
+
+  The comment promises a copy, but the method returns the same *Options the
+  engine is actively using. Options contains an *http.Client, a Headers map
+  and a ProgressCallback, all of which are mutable.
+
+  Engines are used concurrently (multiple worker goroutines read e.opts.*).
+  Any caller that does `eng.Options().Headers["X"] = "y"` or
+  `eng.Options().Concurrency = 64` mutates live state without
+  synchronization and can trigger a data race / concurrent map write panic.
+
+Impact:
+  Data races and `fatal error: concurrent map read and map write`, plus
+  surprising behavior change after the engine has started. The public API
+  contract is also violated (returns a pointer that is not a copy).

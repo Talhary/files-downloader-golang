@@ -4,9 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       download_url:
-        description: "Target URL to download"
+        description: "HTTP or HTTPS target URL"
         required: true
-        default: "https://dl.downloadly.ir/Files/Elearning/The_Gnomon_Workshop_3D_WEAPON_DESIGN_VR_WORKFLOW_2024-6.part5_Downloadly.ir.rar?nocache=1788171959"
       concurrency:
         description: "Concurrent connections (workers)"
         required: false
@@ -19,6 +18,9 @@ on:
         description: "Custom output filename (optional)"
         required: false
         default: ""
+
+permissions:
+  contents: read
 
 jobs:
   download:
@@ -37,30 +39,35 @@ jobs:
 
       - name: Build Download Engine (Linux)
         run: |
-          go build -ldflags="-s -w" -o ./bin/dlengine ./cmd/dlengine
+          set -euo pipefail
+          go build -trimpath -ldflags="-s -w" -o ./bin/dlengine ./cmd/dlengine
           chmod +x ./bin/dlengine
 
       - name: Execute Fast Multi-Part Download
+        shell: bash
+        env:
+          DL_URL: ${{ inputs.download_url }}
+          DL_CONCURRENCY: ${{ inputs.concurrency }}
+          DL_CHUNK_SIZE: ${{ inputs.chunk_size }}
+          DL_OUTPUT: ${{ inputs.output_filename }}
         run: |
-          ARGS="-u \"${{ github.event.inputs.download_url }}\" -c ${{ github.event.inputs.concurrency }} -s ${{ github.event.inputs.chunk_size }}"
-          
-          if [ -n "${{ github.event.inputs.output_filename }}" ]; then
-            ARGS="$ARGS -o \"${{ github.event.inputs.output_filename }}\""
+          set -euo pipefail
+          [[ "$DL_CONCURRENCY" =~ ^[1-9][0-9]*$ ]] || { echo "concurrency must be a positive integer" >&2; exit 1; }
+          [[ "$DL_CHUNK_SIZE" =~ ^[1-9][0-9]*(KB|MB|GB)$ ]] || { echo "chunk_size must look like 8MB" >&2; exit 1; }
+          [[ "$DL_URL" =~ ^https?://[^[:space:]]+$ ]] || { echo "download_url must be an HTTP(S) URL without whitespace" >&2; exit 1; }
+
+          args=(-u "$DL_URL" -c "$DL_CONCURRENCY" -s "$DL_CHUNK_SIZE")
+          if [ -n "$DL_OUTPUT" ]; then
+            if [[ "$DL_OUTPUT" == */* ]] || [[ "$DL_OUTPUT" == .* ]]; then
+              echo "output_filename must be a plain filename" >&2
+              exit 1
+            fi
+            args+=(-o "$DL_OUTPUT")
           fi
-          
-          echo "Running: ./bin/dlengine $ARGS"
-          eval "./bin/dlengine $ARGS"
+
+          printf 'Running ./bin/dlengine with %d arguments\n' "${#args[@]}"
+          ./bin/dlengine "${args[@]}"
 
       - name: List Downloaded Files
         run: |
           ls -lh
-
-      # Optional: Upload artifact or transfer to cloud storage
-      # - name: Upload to Artifacts
-      #   uses: actions/upload-artifact@v4
-      #   with:
-      #     name: downloaded-files
-      #     path: |
-      #       *.rar
-      #       *.zip
-      #       *.tar.gz

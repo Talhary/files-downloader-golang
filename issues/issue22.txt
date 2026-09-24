@@ -1,0 +1,23 @@
+Issue #22: injectDOMInspector prefixes "javascript:" to evaluateJavascript, so the DOM scan never runs
+Severity: Medium
+Component: Android (browser)
+Location: android/app/src/main/java/com/downloadengine/app/browser/MediaSniffer.java:108-120
+
+Evidence:
+      public void injectDOMInspector(WebView webView, String pageTitle) {
+          String js = "javascript:(function() {" +
+                  "  var nodes = document.querySelectorAll('video, audio, source, a[download]');" +
+                  ...
+                  "})();";
+          webView.evaluateJavascript(js, null);
+      }
+
+  WebView.evaluateJavascript() expects a bare script expression. The
+  "javascript:" scheme prefix (used for loadUrl/address-bar execution) is a
+  syntax error when evaluated directly, so the IIFE is not executed.
+
+Impact:
+  DOM-based media sniffing (the `<video>/<audio>/<source>/a[download]`
+  scan) silently never works; only the network-request sniffing in
+  shouldInterceptRequest does. The pageTitle parameter is also unused - the
+  injected script reads document.title itself.

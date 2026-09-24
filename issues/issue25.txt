@@ -1,0 +1,29 @@
+Issue #25: Release workflow overwrites the fixed v1.1.0 tag/release on every push to main
+Severity: High
+Component: CI/CD
+Location: .github/workflows/release.yml:52-69
+
+Evidence:
+      - name: Determine Release Tag
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=v1.1.0" >> $GITHUB_OUTPUT
+          fi
+      ...
+        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
+        with:
+          tag_name: ${{ steps.release_tag.outputs.tag }}
+
+Impact:
+  Every push/merge to main rebuilds binaries and force-updates the single
+  `v1.1.0` release with whatever is currently on main. Consequences:
+  - Immutable-release assumptions break; users who pinned
+    `releases/download/v1.1.0/...` silently receive different bytes.
+  - Binaries for v1.1.0 can be replaced by unreleased main code, so the tag
+    no longer identifies the code it was cut from.
+  - Version stays v1.1.0 forever unless someone bumps engine.Version by hand,
+    while `generate_release_notes` produces new notes against an existing tag.
+  Should only release on tag pushes (or derive the tag from the version file
+  and fail if it already exists).

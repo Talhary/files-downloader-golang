@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/bg_dark"
+    android:padding="16dp">
+
+    <!-- Top Storage Metric Banner -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:background="@drawable/bg_card"
+        android:padding="14dp"
+        android:layout_marginBottom="16dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Storage Usage"
+            android:textColor="@color/text_white"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvStorageDetails"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Downloaded: 0 MB • Free Storage: Calculating..."
+            android:textColor="@color/text_secondary"
+            android:textSize="12sp"
+            android:layout_marginTop="4dp" />
+    </LinearLayout>
+
+    <!-- File Explorer List Container -->
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true">
+
+        <LinearLayout
+            android:id="@+id/filesContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+    </ScrollView>
+
+</LinearLayout>

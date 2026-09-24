@@ -1,4 +1,4 @@
-# Binaries and executables
+# Binaries, build outputs, and archives
 *.exe
 *.exe~
 *.dll
@@ -8,12 +8,41 @@
 *.rar
 *.zip
 *.tar.gz
+/bin/
+/dist/
+/dlengine
+/dlengine-*
+
+# Android signing material and generated output
+*.keystore
+*.jks
+*.apk
+*.apks
+*.aab
+*.idsig
+*.class
+*.dex
+/android/build/
+/android/bin/
+/android/gen/
+/android/*.apk
+/android/*.idsig
+/android/compiled_res.zip
+/android/test_screen*.png
 
 # Test artifacts and local downloads
 sample_download.rar
 downloaded_file*
 test_download*
 test_stream*
+
+# Logs and local runtime state
+logs/
+*.log
+tunnel_config*.json
+*.env*
+*.key
+*.pem
 
 # OS / IDE files
 .DS_Store
@@ -24,3 +53,6 @@ Thumbs.db
 __pycache__/
 *.pyc
 
+# Local AI workspace & scratch
+.ai/
+scratch/

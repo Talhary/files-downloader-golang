@@ -1,0 +1,264 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg_dark">
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:fillViewport="true">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <!-- Category Pills Bar -->
+            <HorizontalScrollView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:scrollbars="none"
+                android:layout_marginBottom="16dp">
+
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+
+                    <Button
+                        android:id="@+id/btnCatAll"
+                        android:layout_width="wrap_content"
+                        android:layout_height="36dp"
+                        android:text="@string/category_all"
+                        android:textColor="@color/bg_dark"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:background="@drawable/bg_button_cyan"
+                        android:layout_marginEnd="8dp" />
+
+                    <Button
+                        android:id="@+id/btnCatVideos"
+                        android:layout_width="wrap_content"
+                        android:layout_height="36dp"
+                        android:text="@string/category_videos"
+                        android:textColor="@color/text_white"
+                        android:textSize="12sp"
+                        android:background="@drawable/bg_button_dark"
+                        android:layout_marginEnd="8dp" />
+
+                    <Button
+                        android:id="@+id/btnCatMusic"
+                        android:layout_width="wrap_content"
+                        android:layout_height="36dp"
+                        android:text="@string/category_music"
+                        android:textColor="@color/text_white"
+                        android:textSize="12sp"
+                        android:background="@drawable/bg_button_dark"
+                        android:layout_marginEnd="8dp" />
+
+                    <Button
+                        android:id="@+id/btnCatDocs"
+                        android:layout_width="wrap_content"
+                        android:layout_height="36dp"
+                        android:text="@string/category_docs"
+                        android:textColor="@color/text_white"
+                        android:textSize="12sp"
+                        android:background="@drawable/bg_button_dark"
+                        android:layout_marginEnd="8dp" />
+
+                    <Button
+                        android:id="@+id/btnCatArchives"
+                        android:layout_width="wrap_content"
+                        android:layout_height="36dp"
+                        android:text="@string/category_archives"
+                        android:textColor="@color/text_white"
+                        android:textSize="12sp"
+                        android:background="@drawable/bg_button_dark"
+                        android:layout_marginEnd="8dp" />
+
+                    <Button
+                        android:id="@+id/btnCatApps"
+                        android:layout_width="wrap_content"
+                        android:layout_height="36dp"
+                        android:text="@string/category_apps"
+                        android:textColor="@color/text_white"
+                        android:textSize="12sp"
+                        android:background="@drawable/bg_button_dark" />
+
+                </LinearLayout>
+            </HorizontalScrollView>
+
+            <!-- IDM Batch Controls Toolbar: Resume All, Stop All, Cancel All, Delete All -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:background="@drawable/bg_card"
+                android:padding="8dp"
+                android:layout_marginBottom="16dp">
+
+                <Button
+                    android:id="@+id/btnBatchResumeAll"
+                    android:layout_width="0dp"
+                    android:layout_height="36dp"
+                    android:layout_weight="1"
+                    android:text="▶ Resume All"
+                    android:textColor="@color/accent_emerald"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:background="@drawable/bg_button_dark"
+                    android:layout_marginEnd="4dp" />
+
+                <Button
+                    android:id="@+id/btnBatchStopAll"
+                    android:layout_width="0dp"
+                    android:layout_height="36dp"
+                    android:layout_weight="1"
+                    android:text="⏸ Stop All"
+                    android:textColor="@color/accent_amber"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:background="@drawable/bg_button_dark"
+                    android:layout_marginEnd="4dp" />
+
+                <Button
+                    android:id="@+id/btnBatchCancelAll"
+                    android:layout_width="0dp"
+                    android:layout_height="36dp"
+                    android:layout_weight="1"
+                    android:text="⏹ Cancel All"
+                    android:textColor="@color/text_white"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:background="@drawable/bg_button_dark"
+                    android:layout_marginEnd="4dp" />
+
+                <Button
+                    android:id="@+id/btnBatchDeleteAll"
+                    android:layout_width="0dp"
+                    android:layout_height="36dp"
+                    android:layout_weight="1"
+                    android:text="🗑 Delete All"
+                    android:textColor="@color/accent_rose"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:background="@drawable/bg_button_dark" />
+
+            </LinearLayout>
+
+            <!-- Active Downloads Header -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="8dp">
+
+                <TextView
+                    android:id="@+id/tvActiveHeader"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Active Downloads (0)"
+                    android:textColor="@color/text_white"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvActiveStats"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0 active"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp" />
+            </LinearLayout>
+
+            <!-- Container for Active Download Cards -->
+            <LinearLayout
+                android:id="@+id/activeContainer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:layout_marginBottom="16dp" />
+
+            <!-- Completed Downloads Header -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginTop="8dp"
+                android:layout_marginBottom="8dp">
+
+                <TextView
+                    android:id="@+id/tvCompletedHeader"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Completed Downloads (0)"
+                    android:textColor="@color/text_white"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvSortToggle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Sort: Date ▼"
+                    android:textColor="@color/primary_cyan"
+                    android:textSize="12sp"
+                    android:clickable="true"
+                    android:focusable="true" />
+            </LinearLayout>
+
+            <!-- Container for Completed Download Cards -->
+            <LinearLayout
+                android:id="@+id/completedContainer"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+
+        </LinearLayout>
+    </ScrollView>
+
+    <!-- Floating Action Buttons Row -->
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_alignParentBottom="true"
+        android:layout_alignParentEnd="true"
+        android:layout_margin="16dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <!-- Quick Import from Clipboard Button -->
+        <Button
+            android:id="@+id/btnClipboardBatch"
+            android:layout_width="wrap_content"
+            android:layout_height="48dp"
+            android:text="📋 Add from Clipboard"
+            android:textColor="@color/bg_dark"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:background="@drawable/bg_button_cyan"
+            android:paddingStart="14dp"
+            android:paddingEnd="14dp"
+            android:layout_marginEnd="10dp" />
+
+        <!-- Floating Action Button for Manual URL / New Task -->
+        <Button
+            android:id="@+id/btnFabAdd"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:text="+"
+            android:textColor="@color/text_white"
+            android:textSize="26sp"
+            android:textStyle="bold"
+            android:background="@drawable/bg_button_dark" />
+
+    </LinearLayout>
+
+</RelativeLayout>

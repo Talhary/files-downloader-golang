@@ -1,0 +1,29 @@
+Issue #15: allowBackup + usesCleartextTraffic + MIXED_CONTENT_ALWAYS_ALLOW weaken transport/data security
+Severity: High
+Component: Android (manifest / WebView)
+Location: android/app/src/main/AndroidManifest.xml:27-34, android/app/src/main/java/com/downloadengine/app/MainActivity.java:605-609
+
+Evidence:
+      <application
+          android:allowBackup="true"
+          ...
+          android:requestLegacyExternalStorage="true"
+          android:usesCleartextTraffic="true">
+
+      WebSettings ws = mWebView.getSettings();
+      ws.setJavaScriptEnabled(true);
+      ws.setDomStorageEnabled(true);
+      ws.setMediaPlaybackRequiresUserGesture(false);
+      ws.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+
+Impact:
+  - usesCleartextTraffic="true" allows all traffic (including the download
+    engine and the WebView) over plain HTTP; downloads and credentials can be
+    intercepted/on-path modified.
+  - MIXED_CONTENT_ALWAYS_ALLOW lets HTTPS pages load HTTP scripts/resources,
+    defeating TLS on the pages the user browses and enabling script injection.
+  - allowBackup="true" without android:fullBackupContent exports the task
+    database (URLs, file paths) to Google/adb backups.
+  - JavaScript is enabled with a JavascriptInterface bridge (mediaBridge)
+    exposed to every loaded page; combined with mixed content this is a broad
+    attack surface for a browser that opens arbitrary URLs.

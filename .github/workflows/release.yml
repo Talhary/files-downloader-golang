@@ -1,4 +1,4 @@
-name: Build & Create Release
+name: Build and Release
 
 on:
   push:
@@ -9,18 +9,15 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build-and-release:
-    name: Build Cross-Platform Binaries & Release
+  build:
+    name: Build Cross-Platform Binaries
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -28,50 +25,82 @@ jobs:
           go-version: '1.22'
           cache: true
 
-      - name: Build Standalone Binaries
+      - name: Build Binaries
         run: |
+          set -euo pipefail
           mkdir -p dist
-          
-          # Linux AMD64 (Ubuntu / standard servers)
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/dlengine-linux-amd64 ./cmd/dlengine
-          chmod +x dist/dlengine-linux-amd64
-          
-          # Linux ARM64 (AWS Graviton / Raspberry Pi)
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dist/dlengine-linux-arm64 ./cmd/dlengine
-          chmod +x dist/dlengine-linux-arm64
-          
-          # Windows AMD64
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/dlengine-windows-amd64.exe ./cmd/dlengine
-          
-          # macOS AMD64 & Apple Silicon (ARM64)
-          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dist/dlengine-darwin-amd64 ./cmd/dlengine
-          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/dlengine-darwin-arm64 ./cmd/dlengine
 
-          ls -lh dist/
+          for target in linux/amd64 linux/arm64 windows/amd64 darwin/amd64 darwin/arm64; do
+            goos="${target%/*}"
+            goarch="${target#*/}"
+            if [ "$goos" = windows ]; then
+              output="dist/dlengine-${goos}-${goarch}.exe"
+            else
+              output="dist/dlengine-${goos}-${goarch}"
+            fi
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath -ldflags="-s -w" -o "$output" ./cmd/dlengine
+            if [ "$goos" != windows ]; then
+              chmod +x "$output"
+            fi
+          done
 
-      - name: Determine Release Tag
-        id: release_tag
+      - name: Verify Release Version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
         run: |
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-          else
-            echo "tag=v1.1.0" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          version="$(sed -n 's/^const Version = "\([^"]*\)"/\1/p' pkg/engine/options.go)"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid engine version: $version" >&2
+            exit 1
+          fi
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match engine version v$version" >&2
+            exit 1
           fi
 
-      - name: Create or Update GitHub Release
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main'
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ steps.release_tag.outputs.tag }}
-          name: Release ${{ steps.release_tag.outputs.tag }}
-          draft: false
-          prerelease: false
-          generate_release_notes: true
-          files: |
-            dist/dlengine-linux-amd64
-            dist/dlengine-linux-arm64
-            dist/dlengine-windows-amd64.exe
-            dist/dlengine-darwin-amd64
-            dist/dlengine-darwin-arm64
+          name: dlengine-binaries
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Prevent Release Overwrite
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists" >&2
+            exit 1
+          fi
+
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dlengine-binaries
+          path: dist
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            dist/dlengine-linux-amd64 \
+            dist/dlengine-linux-arm64 \
+            dist/dlengine-windows-amd64.exe \
+            dist/dlengine-darwin-amd64 \
+            dist/dlengine-darwin-arm64 \
+            --verify-tag \
+            --generate-notes \
+            --title "Release $GITHUB_REF_NAME"

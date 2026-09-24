@@ -1,0 +1,23 @@
+Issue #20: FileManagerHelper.deleteTaskAndFile does not remove the task from memory (ghost card)
+Severity: Medium
+Component: Android (storage/MainActivity)
+Location: android/app/src/main/java/com/downloadengine/app/storage/FileManagerHelper.java:57-71, android/app/src/main/java/com/downloadengine/app/MainActivity.java:824-827
+
+Evidence:
+      public static void deleteTaskAndFile(Context context, DownloadTask task) {
+          if (task.destPath != null) { File f = new File(task.destPath); if (f.exists()) f.delete(); }
+          if (task.statePath != null) { File sf = new File(task.statePath); if (sf.exists()) sf.delete(); }
+          DownloadDatabaseHelper.getInstance(context).deleteTask(task.id);
+      }
+
+  It deletes the DB row and the files but does not remove the object from
+  DownloadQueueManager.mTasks (the in-memory CopyOnWriteArrayList). The
+  caller in MainActivity (bindCompletedCard delete button) then calls
+  refreshDownloadsUi(), which rebuilds from mQueueMgr.getTasks() - still
+  containing the deleted task.
+
+Impact:
+  The completed card reappears after deletion (until app restart), and its
+  destPath now points at a deleted file, so Open/Share fail. The correct path
+  is DownloadQueueManager.cancel()/a dedicated removeTask(), or deleting via
+  the queue manager instead of the helper.
