@@ -36,15 +36,16 @@ type Telemetry struct {
 }
 
 type TunnelManager struct {
-	store       *ConfigStore
-	mu          sync.RWMutex
-	state       TunnelState
-	stateMsg    string
-	startedAt   time.Time
-	sshClient   *SSHClient
-	socksServer *SocksServer
-	vpn         *VPNController
-	sysProxyOn  bool
+	store        *ConfigStore
+	mu           sync.RWMutex
+	state        TunnelState
+	stateMsg     string
+	startedAt    time.Time
+	sshPool      *SSHPool
+	dnsForwarder *DNSForwarder
+	socksServer  *SocksServer
+	vpn          *VPNController
+	sysProxyOn   bool
 
 	logs     []string
 	maxLogs  int
@@ -62,6 +63,7 @@ func NewTunnelManager(store *ConfigStore) *TunnelManager {
 		store:    store,
 		state:    StateDisconnected,
 		stateMsg: "Ready to connect",
+		sshPool:  NewSSHPool(),
 		vpn:      NewVPNController(),
 		maxLogs:  150,
 	}
@@ -153,7 +155,7 @@ func (tm *TunnelManager) runTunnel(ctx context.Context) {
 		// 2. Perform SSH Handshake
 		tm.setState(StateSSHAuth, fmt.Sprintf("Authenticating SSH user '%s'...", cfg.Username))
 		sshClient, err := ConnectSSH(ctx, stream, cfg, tm.Log, func(connErr error) {
-			tm.Log(fmt.Sprintf("Connection dropped: %v", connErr))
+			tm.Log(fmt.Sprintf("Primary SSH tunnel dropped: %v", connErr))
 			if cfg.AutoReconnect {
 				tm.setState(StateReconnecting, "Connection dropped. Reconnecting...")
 				go tm.reconnect(ctx)
@@ -170,25 +172,52 @@ func (tm *TunnelManager) runTunnel(ctx context.Context) {
 		}
 
 		tm.mu.Lock()
-		tm.sshClient = sshClient
+		tm.sshPool.Close()
+		tm.sshPool = NewSSHPool()
+		tm.sshPool.Add(sshClient)
 		tm.startedAt = time.Now()
 		tm.mu.Unlock()
+
+		// Background: establish parallel SSH connections if configured
+		if cfg.SSHConcurrency > 1 {
+			targetPool := cfg.SSHConcurrency
+			go func() {
+				for i := 2; i <= targetPool; i++ {
+					select {
+					case <-ctx.Done():
+						return
+					default:
+					}
+					tm.Log(fmt.Sprintf("Establishing parallel SSH stream %d/%d for high-speed throughput...", i, targetPool))
+					pStream, _, pErr := DialPayload(ctx, cfg, func(string) {})
+					if pErr != nil {
+						tm.Log(fmt.Sprintf("Parallel stream %d dial failed: %v", i, pErr))
+						continue
+					}
+					pClient, pErr := ConnectSSH(ctx, pStream, cfg, func(string) {}, func(err error) {
+						tm.Log(fmt.Sprintf("Parallel stream %d dropped: %v", i, err))
+					})
+					if pErr != nil {
+						_ = pStream.Close()
+						tm.Log(fmt.Sprintf("Parallel stream %d auth failed: %v", i, pErr))
+						continue
+					}
+					tm.sshPool.Add(pClient)
+					tm.Log(fmt.Sprintf("✓ Parallel SSH stream %d/%d active! (Aggregated bandwidth)", i, targetPool))
+				}
+			}()
+		}
 
 		// 3. Start SOCKS5 Server if not already listening
 		tm.mu.Lock()
 		if tm.socksServer == nil {
 			socks, err := NewSocksServer(cfg.SocksPort, func() (*SSHClient, error) {
-				tm.mu.RLock()
-				defer tm.mu.RUnlock()
-				if tm.sshClient == nil {
-					return nil, fmt.Errorf("SSH not connected")
-				}
-				return tm.sshClient, nil
+				return tm.sshPool.Get()
 			}, tm.Log)
 
 			if err != nil {
 				tm.mu.Unlock()
-				_ = sshClient.Close()
+				tm.sshPool.Close()
 				tm.setState(StateError, fmt.Sprintf("SOCKS5 bind error: %v", err))
 				return
 			}
@@ -202,6 +231,17 @@ func (tm *TunnelManager) runTunnel(ctx context.Context) {
 			tm.Log("Starting L3 TUN/TAP VPN mode (NetMod tun2socks)...")
 			if err := tm.vpn.Start(cfg.SocksPort, cfg.BugHost, tm.Log); err != nil {
 				tm.Log(fmt.Sprintf("VPN start error: %v", err))
+			} else {
+				// Start high-speed local DNS forwarder on TAP IP (10.4.2.2:53) to eliminate UDP drop latency
+				df, err := NewDNSForwarder("10.4.2.2:53", func() (*SSHClient, error) {
+					return tm.sshPool.Get()
+				}, tm.Log)
+				if err == nil {
+					tm.mu.Lock()
+					tm.dnsForwarder = df
+					tm.mu.Unlock()
+					tm.Log("✓ Embedded DNS-over-TCP proxy active on 10.4.2.2:53 (0ms cached queries, zero UDP drops)")
+				}
 			}
 		} else if cfg.AutoSetSystemProxy {
 			if err := SetWindowsSystemProxy(cfg.SocksPort); err != nil {
@@ -228,9 +268,12 @@ func (tm *TunnelManager) waitRetry(ctx context.Context, d time.Duration) {
 
 func (tm *TunnelManager) reconnect(ctx context.Context) {
 	tm.mu.Lock()
-	if tm.sshClient != nil {
-		_ = tm.sshClient.Close()
-		tm.sshClient = nil
+	if tm.dnsForwarder != nil {
+		_ = tm.dnsForwarder.Close()
+		tm.dnsForwarder = nil
+	}
+	if tm.sshPool != nil {
+		tm.sshPool.Close()
 	}
 	tm.mu.Unlock()
 
@@ -246,9 +289,13 @@ func (tm *TunnelManager) cleanup() {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 
-	if tm.sshClient != nil {
-		_ = tm.sshClient.Close()
-		tm.sshClient = nil
+	if tm.dnsForwarder != nil {
+		_ = tm.dnsForwarder.Close()
+		tm.dnsForwarder = nil
+	}
+
+	if tm.sshPool != nil {
+		tm.sshPool.Close()
 	}
 
 	if tm.socksServer != nil {
@@ -305,8 +352,8 @@ func (tm *TunnelManager) GetTelemetry() Telemetry {
 		tel.UptimeSeconds = int64(time.Since(tm.startedAt).Seconds())
 	}
 
-	if tm.sshClient != nil {
-		tel.PingMs = tm.sshClient.GetPingMs()
+	if tm.sshPool != nil {
+		tel.PingMs = tm.sshPool.GetPingMs()
 	}
 
 	if tm.socksServer != nil {

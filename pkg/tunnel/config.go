@@ -37,6 +37,7 @@ type Config struct {
 	AutoReconnect      bool `json:"auto_reconnect"`
 	DisableTCPDelay    bool `json:"disable_tcp_delay"`    // TCP_NODELAY (NetMod style low-latency mode)
 	KeepAliveInterval  int  `json:"keepalive_interval_sec"` // in seconds, default 15
+	SSHConcurrency     int  `json:"ssh_concurrency"`      // Parallel SSH connections for multi-stream speed (1-4, default 2)
 }
 
 // DefaultConfig returns clean, safe default parameters without any credentials.
@@ -58,6 +59,7 @@ func DefaultConfig() Config {
 		AutoReconnect:      true,
 		DisableTCPDelay:    true,
 		KeepAliveInterval:  15,
+		SSHConcurrency:     2,
 	}
 }
 
@@ -115,6 +117,11 @@ func (cs *ConfigStore) Update(cfg Config) error {
 	}
 	if cfg.Payload == "" {
 		cfg.Payload = DefaultConfig().Payload
+	}
+	if cfg.SSHConcurrency <= 0 {
+		cfg.SSHConcurrency = 2
+	} else if cfg.SSHConcurrency > 4 {
+		cfg.SSHConcurrency = 4
 	}
 
 	cs.current = cfg

@@ -102,15 +102,25 @@ func (vc *VPNController) Start(socksPort int, bugHost string, logFn func(string)
 	vc.origGateway = gateway
 	vc.mu.Unlock()
 
-	// 4. Configure TAP adapter IP & DNS
+	// 4. Configure TAP adapter IP, MTU & DNS
 	logFn(fmt.Sprintf("Configuring TAP adapter '%s' (IP: %s, GW: %s)...", vc.tapName, vc.tapIP, vc.tapGateway))
 	_ = runWinCmd("netsh", "interface", "ip", "set", "address",
 		fmt.Sprintf("name=%s", vc.tapName),
 		"static", vc.tapIP, vc.tapSubnet, vc.tapGateway)
 
+	// Set optimal MTU (1400) to eliminate packet fragmentation over SSH+WS+TLS encapsulation
+	logFn("Optimizing TAP adapter MTU to 1400 (anti-fragmentation)...")
+	_ = runWinCmd("netsh", "interface", "ipv4", "set", "subinterface",
+		fmt.Sprintf("%s", vc.tapName),
+		"mtu=1400", "store=active")
+
+	// Set DNS to TAP IP (local DNS-over-TCP forwarder) with 1.1.1.1 fallback
 	_ = runWinCmd("netsh", "interface", "ip", "set", "dns",
 		fmt.Sprintf("name=%s", vc.tapName),
-		"static", "1.1.1.1")
+		"static", vc.tapIP)
+	_ = runWinCmd("netsh", "interface", "ip", "add", "dns",
+		fmt.Sprintf("name=%s", vc.tapName),
+		"1.1.1.1", "index=2")
 
 	// 5. Add bypass route for Bug Host IP through physical gateway
 	if gateway != "" && targetIP != "" {

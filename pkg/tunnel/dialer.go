@@ -26,6 +26,8 @@ func (p *PrefixedConn) Read(b []byte) (int, error) {
 	return p.Conn.Read(b)
 }
 
+var tlsSessionCache = tls.NewLRUClientSessionCache(64)
+
 // DialPayload connects to the bug host, injects the HTTP payload, and validates response.
 func DialPayload(ctx context.Context, cfg Config, logFn func(string)) (net.Conn, string, error) {
 	if cfg.BugHost == "" {
@@ -52,8 +54,10 @@ func DialPayload(ctx context.Context, cfg Config, logFn func(string)) (net.Conn,
 		_ = tcp.SetNoDelay(true)
 		_ = tcp.SetKeepAlive(true)
 		_ = tcp.SetKeepAlivePeriod(15 * time.Second)
-		_ = tcp.SetReadBuffer(32768)
-		_ = tcp.SetWriteBuffer(16384)
+		// Preserving OS TCP Window Auto-Tuning:
+		// Manual SetReadBuffer(32768) disables Windows dynamic window scaling and throttles
+		// throughput by BDP (32KB/0.3s = 106 KB/s). Default kernel auto-tuning dynamically
+		// expands window up to 16MB for maximum bandwidth.
 	}
 
 	var conn net.Conn = rawConn
@@ -68,6 +72,8 @@ func DialPayload(ctx context.Context, cfg Config, logFn func(string)) (net.Conn,
 		tlsConfig := &tls.Config{
 			ServerName:         sni,
 			InsecureSkipVerify: true, // Many CDNs/ISP fronts use self-signed or domain mismatches
+			ClientSessionCache: tlsSessionCache,
+			MinVersion:         tls.VersionTLS12,
 		}
 		tlsConn := tls.Client(rawConn, tlsConfig)
 		if err := tlsConn.Handshake(); err != nil {

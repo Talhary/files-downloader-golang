@@ -20,7 +20,7 @@ type SocksStats struct {
 
 var pipeBufferPool = sync.Pool{
 	New: func() interface{} {
-		b := make([]byte, 32*1024)
+		b := make([]byte, 64*1024) // 64KB buffer for optimal high-throughput transfer
 		return &b
 	},
 }
@@ -127,8 +127,7 @@ func (s *SocksServer) handleConnection(localConn net.Conn) {
 		_ = tcp.SetNoDelay(true)
 		_ = tcp.SetKeepAlive(true)
 		_ = tcp.SetKeepAlivePeriod(15 * time.Second)
-		_ = tcp.SetReadBuffer(32768)
-		_ = tcp.SetWriteBuffer(16384)
+		// Loopback 127.0.0.1 uses OS default buffer sizing for maximum inter-process bandwidth
 	}
 
 	// Set initial handshake deadline
@@ -249,11 +248,15 @@ func (s *SocksServer) handleConnection(localConn net.Conn) {
 		buf := *bufPtr
 		defer pipeBufferPool.Put(bufPtr)
 
+		var lastTouch int64
 		for {
 			n, err := localConn.Read(buf)
 			if n > 0 {
 				s.bytesOut.Add(uint64(n))
-				sshClient.Touch()
+				if now := time.Now().Unix(); now != lastTouch {
+					lastTouch = now
+					sshClient.Touch()
+				}
 				if _, werr := remoteConn.Write(buf[:n]); werr != nil {
 					break
 				}
@@ -276,11 +279,15 @@ func (s *SocksServer) handleConnection(localConn net.Conn) {
 		buf := *bufPtr
 		defer pipeBufferPool.Put(bufPtr)
 
+		var lastTouch int64
 		for {
 			n, err := remoteConn.Read(buf)
 			if n > 0 {
 				s.bytesIn.Add(uint64(n))
-				sshClient.Touch()
+				if now := time.Now().Unix(); now != lastTouch {
+					lastTouch = now
+					sshClient.Touch()
+				}
 				if _, werr := localConn.Write(buf[:n]); werr != nil {
 					break
 				}
